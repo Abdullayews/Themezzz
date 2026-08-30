@@ -52,6 +52,8 @@ def render_preview(cats, wall, wall_mode, wall_bytes, swatches, active):
     WD, HT = 480, 940
     BAR_H, INP_H, PAN_H = 56 * S, 52 * S, 196 * S
     chat_b = HT * S - INP_H - PAN_H
+    iy = chat_b
+    py0 = chat_b + INP_H
 
     # ---- wallpaper strip (user's image as-is, or flat color + its alpha) ----
     if wall_mode == "image" and wall_bytes:
@@ -59,10 +61,11 @@ def render_preview(cats, wall, wall_mode, wall_bytes, swatches, active):
     else:
         strip = Image.new("RGB", (WD * S, chat_b), bg)
         wa = round(255 * (1 - wall["alpha"] / 100))
-        ov = Image.new("RGBA", (WD * S, chat_b), hex_to_rgb(wall["hex"]) + (wa,))
-        strip = Image.alpha_composite(strip.convert("RGBA"), ov).convert("RGB")
+        fov = Image.new("RGBA", (WD * S, chat_b),
+                        hex_to_rgb(wall["hex"]) + (wa,))
+        strip = Image.alpha_composite(strip.convert("RGBA"), fov).convert("RGB")
 
-    # ---- alpha overlay: bar, date chip, bubbles ----
+    # ---- alpha overlay: bar, date chip, bubbles (chat_b ölçüsü — uyğundur) ----
     ov = Image.new("RGBA", (WD * S, chat_b), (0, 0, 0, 0))
     od = ImageDraw.Draw(ov)
     od.rectangle([0, 0, WD * S, BAR_H], fill=bar + (A["bar"],))
@@ -130,28 +133,32 @@ def render_preview(cats, wall, wall_mode, wall_bytes, swatches, active):
     img = Image.new("RGB", (WD * S, HT * S), bg)
     img.paste(strip, (0, 0))
 
-    # input bar (bg + its alpha)
-    ov2 = Image.new("RGBA", (WD * S, INP_H), bg + (A["bg"],))
+    # ✅ FIX: overlay tam kətan ölçüsündə — yalnız input bar bölgəsi doldurulur
+    ov2 = Image.new("RGBA", (WD * S, HT * S), (0, 0, 0, 0))
+    ImageDraw.Draw(ov2).rectangle([0, iy, WD * S, iy + INP_H],
+                                  fill=bg + (A["bg"],))
     img = Image.alpha_composite(img.convert("RGBA"), ov2).convert("RGB")
     d = ImageDraw.Draw(img)
-    iy = chat_b
-    d.line([(0, iy), (WD * S, iy)], fill=W + (60,), width=S)
+
+    # input bar content (white — rule)
     d.arc([20 * S, iy + 16 * S, 36 * S, iy + 32 * S], 90, 270, fill=W, width=2 * S)
-    d.text((72 * S, iy + 17 * S), "Message", font=f_sub, fill=W + (170,))
+    d.text((72 * S, iy + 17 * S), "Message", font=f_sub, fill=W)
     d.ellipse([(WD - 44) * S, iy + 10 * S, (WD - 10) * S, iy + 44 * S], fill=acc)
     d.polygon([(WD - 36) * S, iy + 19 * S, (WD - 36) * S, iy + 35 * S,
                (WD - 22) * S, iy + 27 * S], fill=W)
 
     # ---- editor panel (opaque) ----
-    py0 = chat_b + INP_H
     d.rectangle([0, py0, WD * S, HT * S], fill=bg)
-    d.line([(0, py0), (WD * S, py0)], fill=W + (60,), width=S)
+    soft = tuple(int(c + (255 - c) * 0.25) for c in bg)   # bg + 25% white
+    d.line([(0, iy), (WD * S, iy)], fill=soft, width=S)
+    d.line([(0, py0), (WD * S, py0)], fill=soft, width=S)
 
+    show_alpha = active in ("bg", "bar", "in", "out", "accent") or \
+                 (active == "wall" and wall_mode == "flat")
     a = cats.get(active, wall)
-    a_txt = f" · {a['alpha']}%" if active in ("bg", "bar", "in", "out", "accent",
-                                              "wall") and a.get("alpha") else ""
+    a_txt = f" · {a['alpha']}%" if (show_alpha and a.get("alpha")) else ""
     d.text((16 * S, py0 + 8 * S),
-           f"Editing: {active}  {a['hex']}{a_txt}", font=f_info, fill=W + (190,))
+           f"Editing: {active}  {a['hex']}{a_txt}", font=f_info, fill=W)
 
     # category chips
     r = 13 * S
@@ -172,7 +179,7 @@ def render_preview(cats, wall, wall_mode, wall_bytes, swatches, active):
             d.ellipse([ccx - r - 4 * S, cy2 - r - 4 * S,
                        ccx + r + 4 * S, cy2 + r + 4 * S], outline=acc, width=2 * S)
         lw = d.textlength(lbl, font=f_lbl)
-        d.text((ccx - lw / 2, cy2 + r + 5 * S), lbl, font=f_lbl, fill=W + (170,))
+        d.text((ccx - lw / 2, cy2 + r + 5 * S), lbl, font=f_lbl, fill=W)
 
     # photo swatches (suggestions — tap to apply)
     n = min(len(swatches), 6)
@@ -196,7 +203,7 @@ def render_preview(cats, wall, wall_mode, wall_bytes, swatches, active):
 
     d.text((16 * S, py0 + 158 * S),
            "Swatches from your photo — tap one to apply to the selected part",
-           font=f_lbl, fill=W + (150,))
+           font=f_lbl, fill=W)
 
     img = img.resize((WD, HT), Image.Resampling.LANCZOS)
     buf = io.BytesIO()
