@@ -126,6 +126,17 @@ def caption(st):
     return "\n".join(rows)
 
 
+def swatch_row(st):
+    cur = active_hex(st)
+    row = []
+    for i, hexcol in enumerate(st["swatches"][:6]):
+        mark = "●" if cur == hexcol else ""
+        row.append(InlineKeyboardButton(f"{mark}{i + 1}", callback_data=f"sw:{i}"))
+    if cur not in st["swatches"]:
+        row.append(InlineKeyboardButton("🎯", callback_data="noop"))
+    return row
+
+
 def keyboard(st):
     act = st["active"]
     rows = [
@@ -166,53 +177,51 @@ def keyboard(st):
     return InlineKeyboardMarkup(rows)
 
 
-def swatch_row(st):
-    cur = active_hex(st)
-    row = []
-    for i, hexcol in enumerate(st["swatches"][:6]):
-        mark = "●" if cur == hexcol else ""
-        row.append(InlineKeyboardButton(f"{mark}{i + 1}", callback_data=f"sw:{i}"))
-    if cur not in st["swatches"]:
-        row.append(InlineKeyboardButton("🎯", callback_data="noop"))
-    return row
-
-
-def build_payload(st):
-    png = render_preview(st["cats"], st["wall"], st["wall_mode"],
-                         st["wall_bytes"], st["swatches"], st["active"])
-    return png, caption(st), keyboard(st)
+def render_safe(st):
+    """Render the preview; returns None on ANY failure (never raises)."""
+    try:
+        return render_preview(st["cats"], st["wall"], st["wall_mode"],
+                              st["wall_bytes"], st["swatches"], st["active"])
+    except Exception as e:
+        logger.error(f"Preview render failed: {e}")
+        return None
 
 
 async def refresh_editor(chat_id, st, context):
     if not st.get("msg_id"):
         return
-    png, cap, kb = build_payload(st)
+    cap, kb = caption(st), keyboard(st)
+
     if st["mode"] == "photo":
-        ok = False
-        for _ in range(2):
-            png.seek(0)
-            try:
-                await context.bot.edit_message_media(
-                    chat_id=chat_id, message_id=st["msg_id"],
-                    media=InputMediaPhoto(png, caption=cap, parse_mode="HTML"),
-                    reply_markup=kb)
-                ok = True
-                break
-            except RetryAfter as e:
-                await asyncio.sleep(float(e.retry_after) + 1)
-            except BadRequest:
-                ok = True
-                break
-            except Exception as e:
-                logger.warning(f"Media edit failed: {e}")
-                break
-        if not ok:
-            try:
-                await context.bot.edit_message_caption(
-                    chat_id=chat_id, message_id=st["msg_id"],
-                    caption=cap, reply_markup=kb, parse_mode="HTML")
-            except Exception:
-                pass
+        png = render_safe(st)
+        if png is not None:
+            ok = False
+            for _ in range(2):
+                png.seek(0)
+                try:
+                    await context.bot.edit_message_media(
+                        chat_id=chat_id, message_id=st["msg_id"],
+                        media=InputMediaPhoto(png, caption=cap, parse_mode="HTML"),
+                        reply_markup=kb)
+                    ok = True
+                    break
+                except RetryAfter as e:
+                    await asyncio.sleep(float(e.retry_after) + 1)
+                except BadRequest:
+                    ok = True   # nothing changed — fine
+                    break
+                except Exception as e:
+                    logger.warning(f"Media edit failed: {e}")
+                    break
+            if ok:
+                return
+        # fallback: old image stays, caption + buttons update
+        try:
+            await context.bot.edit_message_caption(
+                chat_id=chat_id, message_id=st["msg_id"],
+                caption=cap, reply_markup=kb, parse_mode="HTML")
+        except Exception:
+            pass
     else:
         try:
             await context.bot.edit_message_text(
@@ -230,14 +239,19 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def send_editor(msg, st, context):
-    png, cap, kb = build_payload(st)
-    try:
-        png.name = "preview.png"
-        sent = await msg.reply_photo(photo=png, caption=cap, reply_markup=kb,
-                                     parse_mode="HTML")
-        st["mode"] = "photo"
-    except Exception as e:
-        logger.error(f"Preview failed → text mode: {e}")
+    cap, kb = caption(st), keyboard(st)
+    png = render_safe(st)
+    if png is not None:
+        try:
+            png.name = "preview.png"
+            sent = await msg.reply_photo(photo=png, caption=cap, reply_markup=kb,
+                                         parse_mode="HTML")
+            st["mode"] = "photo"
+        except Exception as e:
+            logger.error(f"Photo send failed → text mode: {e}")
+            sent = await msg.reply_text(cap, reply_markup=kb, parse_mode="HTML")
+            st["mode"] = "text"
+    else:
         sent = await msg.reply_text(cap, reply_markup=kb, parse_mode="HTML")
         st["mode"] = "text"
     st["msg_id"] = sent.message_id
