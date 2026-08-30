@@ -6,7 +6,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "✅ Material You Theme Bot is running!"
+    return "✅ Theme Bot is running!"
 
 @app.route("/health")
 def health():
