@@ -25,7 +25,7 @@ def _cover(img, w, h):
     """Crop image to fully cover the w×h area."""
     iw, ih = img.size
     scale = max(w / iw, h / ih)
-    img = img.resize((int(iw * scale) + 1, int(ih * scale) + 1), Image.LANCZOS)
+    img = img.resize((int(iw * scale) + 1, int(ih * scale) + 1), Image.Resampling.LANCZOS)
     x, y = (img.width - w) // 2, (img.height - h) // 2
     return img.crop((x, y, x + w, y + h))
 
@@ -160,7 +160,7 @@ def render_preview(seed_hex, style, alpha_pct, role, chroma, contrast,
                (W - 43) * S, (H - 48) * S],
               fill=N(10) if dark else N(100))
 
-    img = img.resize((W, H), Image.LANCZOS)
+    img = img.resize((W, H), Image.Resampling.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, "PNG")
     buf.seek(0)
