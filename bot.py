@@ -1,3 +1,4 @@
+import asyncio
 import io
 import logging
 import re
@@ -66,7 +67,7 @@ def short_summary(st) -> str:
 def keyboard(st) -> InlineKeyboardMarkup:
     sel = st["seed"]
     rows = [
-        [   # Slider
+        [   # Transparency slider
             InlineKeyboardButton("-10", callback_data="a:-10"),
             InlineKeyboardButton("-5", callback_data="a:-5"),
             InlineKeyboardButton(f"🫧 {st['alpha']}%", callback_data="noop"),
@@ -288,6 +289,13 @@ def main():
         raise SystemExit("❌ BOT_TOKEN not found!")
 
     start_server()  # Port binding required by Render
+
+    # Python 3.12+/3.14: asyncio.get_event_loop() no longer auto-creates
+    # a loop. Required regardless of PTB version — keep as is.
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
 
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler(["start", "help"], cmd_start))
