@@ -38,10 +38,11 @@ WELCOME = (
     "Hi! I build Telegram themes (.attheme) from your picture.\n\n"
     "<b>How it works</b>\n"
     "1️⃣ Send me any image — I grab its colors\n"
-    "2️⃣ Pick a part: BG, Bar, In/Out bubbles, Text, Accent, Wallpaper\n"
-    "3️⃣ Choose a color (⚡ auto, №1-6 suggested, or type #hex)\n"
+    "2️⃣ Pick 🌙 Dark or ☀️ Light mode\n"
+    "3️⃣ Pick a part: BG, Bar, In/Out bubbles, Text, Accent, Wallpaper\n"
+    "4️⃣ Choose a color (⚡ auto, №1-6 suggested, or type #hex)\n"
     "    and set transparency with the slider\n"
-    "4️⃣ ✅ Create theme — done!\n\n"
+    "5️⃣ ✅ Create theme — done!\n\n"
     "🔄 Reset clears only the part you're editing.\n"
     "📸 <b>Send a picture to start!</b>"
 )
@@ -52,6 +53,7 @@ WELCOME = (
 def default_state(palette, wall_bytes):
     return {
         "palette": palette,                       # 6 suggested colors
+        "mode": "dark",                           # 🌗 general coloring theme
         "sections": {k: {"idx": -1, "alpha": 0, "custom": None}
                      for k in ALPHA_SECTIONS},
         "active": "bg",
@@ -60,7 +62,7 @@ def default_state(palette, wall_bytes):
         "wall_custom": None,
         "wall_bytes": wall_bytes,
         "msg_id": None,
-        "mode": "photo",
+        "mode_img": "photo",
     }
 
 
@@ -94,19 +96,23 @@ def set_custom(st, hexcol):
 # ---------- UI ----------
 
 def caption(st):
-    res = resolve_theme(st["palette"], st["sections"])
+    res = resolve_theme(st["palette"], st["sections"], st["mode"])
 
     def fmt(k):
         if k == "wall":
             if st["wall_mode"] == "image" and st["wall_bytes"]:
                 return "image"
             return rgb_to_hex(resolve_wall(st["palette"], st["wall_idx"],
-                                           st["wall_custom"]))
+                                           st["wall_custom"], st["mode"]))
         s = st["sections"][k]
         tr = f" · {s['alpha']}%" if s["alpha"] else ""
         return rgb_to_hex(res[k]) + tr
 
-    lines = ["🎨 <b>Theme Editor</b>", "──────────────"]
+    lines = [
+        "🎨 <b>Theme Editor</b>",
+        f"🌗 Mode: <b>{'Dark' if st['mode'] == 'dark' else 'Light'}</b>",
+        "──────────────",
+    ]
     for a, b in (("bg", "bar"), ("in", "out"), ("text", "accent")):
         lines.append(f"{SEC_LABEL[a]} {fmt(a)}   {SEC_LABEL[b]} {fmt(b)}")
     lines.append(f"{SEC_LABEL['wall']} {fmt('wall')}")
@@ -121,6 +127,12 @@ def caption(st):
 
 def keyboard(st):
     rows = [
+        [   # 🌗 mode row — drives all auto colors
+            InlineKeyboardButton(("● " if st["mode"] == "dark" else "○ ") + "🌙 Dark",
+                                 callback_data="mode:dark"),
+            InlineKeyboardButton(("● " if st["mode"] == "light" else "○ ") + "☀️ Light",
+                                 callback_data="mode:light"),
+        ],
         [InlineKeyboardButton(("● " if st["active"] == k else "") + lbl,
                               callback_data=f"sec:{k}") for k, lbl in SECTIONS[:4]],
         [InlineKeyboardButton(("● " if st["active"] == k else "") + lbl,
@@ -175,10 +187,11 @@ def keyboard(st):
 
 
 def build_payload(st):
-    res = resolve_theme(st["palette"], st["sections"])
+    res = resolve_theme(st["palette"], st["sections"], st["mode"])
     alphas = {k: st["sections"][k]["alpha"] for k in ALPHA_SECTIONS}
     wall = st["wall_bytes"] if (st["wall_mode"] == "image" and st["wall_bytes"]) else None
-    wall_flat = resolve_wall(st["palette"], st["wall_idx"], st["wall_custom"])
+    wall_flat = resolve_wall(st["palette"], st["wall_idx"], st["wall_custom"],
+                             st["mode"])
     png = render_preview(res, alphas, wall, wall_flat)
     return png, caption(st), keyboard(st)
 
@@ -187,7 +200,7 @@ async def refresh_editor(chat_id, st, context):
     if not st.get("msg_id"):
         return
     png, cap, kb = build_payload(st)
-    if st["mode"] == "photo":
+    if st["mode_img"] == "photo":
         ok = False
         for _ in range(2):
             png.seek(0)
@@ -235,11 +248,11 @@ async def send_editor(msg, st, context):
         png.name = "preview.png"
         sent = await msg.reply_photo(photo=png, caption=cap, reply_markup=kb,
                                      parse_mode="HTML")
-        st["mode"] = "photo"
+        st["mode_img"] = "photo"
     except Exception as e:
         logger.error(f"Preview failed → text mode: {e}")
         sent = await msg.reply_text(cap, reply_markup=kb, parse_mode="HTML")
-        st["mode"] = "text"
+        st["mode_img"] = "text"
     st["msg_id"] = sent.message_id
 
 
@@ -306,11 +319,11 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "make":
         await q.answer("⏳ Creating theme...")
-        res = resolve_theme(st["palette"], st["sections"])
+        res = resolve_theme(st["palette"], st["sections"], st["mode"])
         alphas = {k: st["sections"][k]["alpha"] for k in ALPHA_SECTIONS}
         wall = st["wall_bytes"] if (st["wall_mode"] == "image" and st["wall_bytes"]) else None
         wall_flat = None if wall else resolve_wall(st["palette"], st["wall_idx"],
-                                                   st["wall_custom"])
+                                                   st["wall_custom"], st["mode"])
         try:
             theme = build_attheme(res, alphas, wall, wall_flat)
         except Exception as e:
@@ -323,6 +336,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_document(
             chat_id=update.effective_chat.id, document=theme, filename=fname,
             caption="🎨 <b>Your theme is ready!</b>\n"
+                    f"Mode: {st['mode'].capitalize()} · "
                     f"Accent {rgb_to_hex(res['accent'])} · "
                     f"In {alphas['in']}% · Out {alphas['out']}%\n\n"
                     "Open the file — Telegram applies it instantly ✨",
@@ -333,7 +347,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer()
         return
 
-    if data.startswith("sec:"):
+    if data.startswith("mode:"):
+        st["mode"] = data[5:]
+    elif data.startswith("sec:"):
         st["active"] = data[4:]
     elif data == "auto":
         if st["active"] == "wall":
@@ -353,7 +369,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "wp:flat":
         st["wall_mode"] = "flat"
     elif data == "reset":
-        # ⬅ ONLY the active part is reset
+        # ONLY the active part is reset (mode is not touched)
         if st["active"] == "wall":
             st["wall_mode"] = "image" if st["wall_bytes"] else "flat"
             st["wall_idx"], st["wall_custom"] = -1, None
