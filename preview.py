@@ -2,18 +2,15 @@ import io
 
 from PIL import Image, ImageDraw, ImageFont
 
-from colors import hex_to_rgb
-
-W = (255, 255, 255)
-
-CHIPS = [("bg", "BG"), ("bar", "BAR"), ("in", "IN"), ("out", "OUT"),
-         ("link", "LINK"), ("accent", "ACC"), ("wall", "WALL")]
+from colors import readable_on, mix, ensure_contrast
 
 
 def _font(size):
-    for path in ("/usr/share/fonts/truetype/roboto/unhinted/Roboto-Regular.ttf",
-                 "/usr/share/fonts/truetype/roboto/Roboto-Regular.ttf",
-                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"):
+    for path in (
+        "/usr/share/fonts/truetype/roboto/unhinted/Roboto-Regular.ttf",
+        "/usr/share/fonts/truetype/roboto/Roboto-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ):
         try:
             return ImageFont.truetype(path, size)
         except Exception:
@@ -41,171 +38,143 @@ def _checks(d, x, y, s, col):
     d.line([(x + s * 0.75, y + s * 0.7), (x + s * 1.15, y)], fill=col, width=w)
 
 
-def render_preview(cats, wall, wall_mode, wall_bytes, swatches, active):
-    """1:1 Telegram chat mock — only colors the user actually picked."""
-    C = {k: hex_to_rgb(cats[k]["hex"]) for k in cats}
-    A = {k: round(255 * (1 - cats[k]["alpha"] / 100)) for k in cats}
-    bg, bar, inb, outb = C["bg"], C["bar"], C["in"], C["out"]
-    link, acc = C["link"], C["accent"]
+def _flame(d, cx, cy, h):
+    """🔥 drawn manually (no emoji font on server)."""
+    outer = (255, 109, 0)
+    inner = (255, 214, 0)
+    d.polygon([(cx - 0.30 * h, cy + 0.18 * h), (cx, cy - 0.50 * h),
+               (cx + 0.30 * h, cy + 0.18 * h)], fill=outer)
+    d.ellipse([cx - 0.32 * h, cy - 0.05 * h, cx + 0.32 * h, cy + 0.45 * h], fill=outer)
+    d.polygon([(cx - 0.14 * h, cy + 0.22 * h), (cx, cy - 0.12 * h),
+               (cx + 0.14 * h, cy + 0.22 * h)], fill=inner)
+    d.ellipse([cx - 0.15 * h, cy + 0.12 * h, cx + 0.15 * h, cy + 0.42 * h], fill=inner)
+
+
+def _paperclip(d, cx, cy, s, col):
+    r = s * 0.28
+    w = max(2, int(s * 0.09))
+    d.arc([cx - r, cy - r, cx + r, cy + r], 90, 270, fill=col, width=w)
+    d.arc([cx - r, cy - r * 1.8, cx + r, cy + r * 0.2], 270, 90, fill=col, width=w)
+    d.line([(cx, cy - r), (cx, cy + r)], fill=col, width=w)
+
+
+def render_preview(colors, alphas, wall_bytes, wall_flat):
+    """1:1 copy of the classic Telegram theme-preview chat screen."""
+    bg, bar = colors["bg"], colors["bar"]
+    inb, outb = colors["in"], colors["out"]
+    text, accent = colors["text"], colors["accent"]
+
+    A = lambda k: max(0, min(255, round(255 * (1 - alphas.get(k, 0) / 100.0))))
 
     S = 2
-    WD, HT = 480, 940
-    BAR_H, INP_H, PAN_H = 56 * S, 52 * S, 196 * S
-    chat_b = HT * S - INP_H - PAN_H
-    iy = chat_b
-    py0 = chat_b + INP_H
+    W, H = 480, 900
+    BAR_H, INPUT_H = 56 * S, 56 * S
+    chat_y1 = H * S - INPUT_H
 
-    # ---- wallpaper strip (user's image as-is, or flat color + its alpha) ----
-    if wall_mode == "image" and wall_bytes:
-        strip = _cover(Image.open(io.BytesIO(wall_bytes)), WD * S, chat_b)
+    # ---- wallpaper / canvas ----
+    if wall_bytes:
+        chat = _cover(Image.open(io.BytesIO(wall_bytes)), W * S, chat_y1 - BAR_H)
     else:
-        strip = Image.new("RGB", (WD * S, chat_b), bg)
-        wa = round(255 * (1 - wall["alpha"] / 100))
-        fov = Image.new("RGBA", (WD * S, chat_b),
-                        hex_to_rgb(wall["hex"]) + (wa,))
-        strip = Image.alpha_composite(strip.convert("RGBA"), fov).convert("RGB")
+        chat = Image.new("RGB", (W * S, chat_y1 - BAR_H), wall_flat)
+    img = Image.new("RGB", (W * S, H * S), bg)
+    img.paste(chat, (0, BAR_H))
 
-    # ---- alpha overlay: bar, date chip, bubbles (chat_b ölçüsü — uyğundur) ----
-    ov = Image.new("RGBA", (WD * S, chat_b), (0, 0, 0, 0))
+    f_title = _font(17 * S)
+    f_sub   = _font(13 * S)
+    f_bub   = _font(16 * S)
+    f_time  = _font(12 * S)
+    f_av    = _font(20 * S)
+
+    in_text = ensure_contrast(text, inb)
+    out_text = ensure_contrast(text, outb)
+
+    # ---- transparent layer: bar, bubbles, send button ----
+    ov = Image.new("RGBA", (W * S, H * S), (0, 0, 0, 0))
     od = ImageDraw.Draw(ov)
-    od.rectangle([0, 0, WD * S, BAR_H], fill=bar + (A["bar"],))
+    od.rectangle([0, 0, W * S, BAR_H], fill=bar + (A("bar"),))
 
-    f_title, f_sub = _font(17 * S), _font(13 * S)
-    f_bub, f_time = _font(16 * S), _font(12 * S)
-    f_info, f_lbl = _font(13 * S), _font(10 * S)
+    pad_x, pad_y = 12 * S, 8 * S
+    ta = A("text")
 
-    chip_w, chip_h = 150 * S, 40 * S
-    cx, cy = (WD * S - chip_w) // 2, BAR_H + 14 * S
-    od.rounded_rectangle([cx, cy, cx + chip_w, cy + chip_h], radius=chip_h // 2,
-                         fill=bg + (max(A["bg"], 160),))
-
-    pad_x, pad_y, line_h = 12 * S, 9 * S, 22 * S
-
-    def bubble(lines_txt, fill, alpha, out=False, y=0):
-        w = max(od.textlength(t, font=f_bub) for t in lines_txt) + pad_x * 2 + 60 * S
-        h = len(lines_txt) * line_h + pad_y * 2 + 14 * S
-        x = (WD * S - w - 14 * S) if out else 14 * S
-        od.rounded_rectangle([x, y, x + w, y + h], radius=16 * S,
-                             fill=fill + (alpha,))
-        return x, y, w, h, lines_txt
-
-    y1 = cy + chip_h + 18 * S
-    b1 = bubble(["Hey! Check this out —", "all text is white now"],
-                inb, A["in"], y=y1)
-    y2 = y1 + b1[3] + 10 * S
-    b2 = bubble(["Nice! 🔥", "t.me/addtheme/mine"], outb, A["out"], out=True, y=y2)
-
-    strip = Image.alpha_composite(strip.convert("RGBA"), ov).convert("RGB")
-    d = ImageDraw.Draw(strip)
-
-    # bar content (white — rule)
-    d.line([(14 * S, 22 * S), (14 * S, 34 * S), (24 * S, 28 * S)], fill=W, width=3 * S)
-    d.ellipse([42 * S, 11 * S, 74 * S, 43 * S], fill=acc)
-    tw = d.textlength("T", font=f_title)
-    d.text((58 * S - tw / 2, 13 * S), "T", font=f_title, fill=W)
-    d.text((84 * S, 8 * S), "Telegram", font=f_title, fill=W)
-    d.text((84 * S, 30 * S), "online", font=f_sub, fill=W)
-    for i in range(3):
-        d.ellipse([(WD - 22) * S, (24 + i * 8) * S,
-                   (WD - 18) * S, (28 + i * 8) * S], fill=W)
-    d.text(((WD * S - d.textlength("Today", font=f_sub)) // 2, cy + 12 * S),
-           "Today", font=f_sub, fill=W)
-
-    # bubble content (white text; the link line is the ONLY colored text)
-    def texts(b, out, time_str, link_line=None):
-        x, y, w, h, lines = b
-        ty = y + pad_y
-        for t in lines:
-            col = link if (link_line and t == link_line) else W
-            d.text((x + pad_x, ty), t, font=f_bub, fill=col)
-            ty += line_h
-        ty2 = y + h - pad_y - 12 * S
-        tx = x + w - pad_x
+    def bubble(txt, fill, alpha, tcol, out, y, flame=False):
+        time_str = "14:33" if out else "14:32"
+        tw = od.textlength(txt, font=f_bub)
+        flame_w = 32 * S if flame else 0
+        time_w = od.textlength(time_str, font=f_time)
+        meta_w = time_w + (34 * S if out else 0)
+        bw = int(max(tw + flame_w, meta_w) + pad_x * 2)
+        bh = int(f_bub.size + pad_y * 2 + 12 * S)
+        x = int((W * S - bw - 14 * S) if out else 14 * S)
+        corners = (1, 1, 0, 1) if out else (1, 1, 1, 0)
+        od.rounded_rectangle([x, y, x + bw, y + bh], radius=16 * S,
+                             fill=fill + (alpha,), corners=corners)
+        od.text((x + pad_x, y + pad_y), txt, font=f_bub, fill=tcol + (ta,))
+        ty = y + bh - pad_y - 10 * S
+        tx_end = x + bw - pad_x
+        od.text((tx_end - time_w, ty), time_str, font=f_time,
+                fill=mix(tcol, fill, 0.30) + (ta,))
         if out:
-            _checks(d, tx - 46 * S, ty2, 13 * S, W)
-        d.text((tx - d.textlength(time_str, font=f_time), ty2), time_str,
-               font=f_time, fill=W)
+            _checks(od, tx_end - time_w - 30 * S, ty, 13 * S,
+                    mix(tcol, fill, 0.20) + (ta,))
+        return x, y, bw, bh, tw
 
-    texts(b1, False, "14:32")
-    texts(b2, True, "14:33", link_line="t.me/addtheme/mine")
+    y1 = BAR_H + 48 * S
+    b1 = bubble("Привет! Как тебе тема?", inb, A("in"), in_text, False, y1)
+    y2 = y1 + b1[3] + 12 * S
+    b2 = bubble("ВЫГЛЯДИТ ОТЛИЧНО", outb, A("out"), out_text, True, y2, flame=True)
 
-    # ---- assemble canvas ----
-    img = Image.new("RGB", (WD * S, HT * S), bg)
-    img.paste(strip, (0, 0))
+    # send button (respects accent transparency)
+    scx, scy, sr = W * S - 44 * S, chat_y1 + INPUT_H // 2, 21 * S
+    od.ellipse([scx - sr, scy - sr, scx + sr, scy + sr],
+               fill=accent + (A("accent"),))
 
-    # ✅ FIX: overlay tam kətan ölçüsündə — yalnız input bar bölgəsi doldurulur
-    ov2 = Image.new("RGBA", (WD * S, HT * S), (0, 0, 0, 0))
-    ImageDraw.Draw(ov2).rectangle([0, iy, WD * S, iy + INP_H],
-                                  fill=bg + (A["bg"],))
-    img = Image.alpha_composite(img.convert("RGBA"), ov2).convert("RGB")
+    img = Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")
     d = ImageDraw.Draw(img)
 
-    # input bar content (white — rule)
-    d.arc([20 * S, iy + 16 * S, 36 * S, iy + 32 * S], 90, 270, fill=W, width=2 * S)
-    d.text((72 * S, iy + 17 * S), "Message", font=f_sub, fill=W)
-    d.ellipse([(WD - 44) * S, iy + 10 * S, (WD - 10) * S, iy + 44 * S], fill=acc)
-    d.polygon([(WD - 36) * S, iy + 19 * S, (WD - 36) * S, iy + 35 * S,
-               (WD - 22) * S, iy + 27 * S], fill=W)
+    # ---- action bar content ----
+    bar_text = readable_on(bar)
+    s = 22 * S
+    d.line([(24 * S, BAR_H // 2 - s // 2), (12 * S, BAR_H // 2),
+            (24 * S, BAR_H // 2 + s // 2)],
+           fill=mix(bar_text, bar, 0.10), width=3 * S)
+    acx, acy, ar = 56 * S, BAR_H // 2, 17 * S
+    d.ellipse([acx - ar, acy - ar, acx + ar, acy + ar], fill=accent)
+    d.text((acx, acy), "Ч", font=f_av, fill=readable_on(accent), anchor="mm")
+    d.text((82 * S, 8 * S), "Чат", font=f_title, fill=bar_text)
+    d.text((82 * S, 34 * S), "онлайн", font=f_sub, fill=ensure_contrast(accent, bar))
+    for i in range(3):
+        cyd = BAR_H // 2 - 8 * S + i * 8 * S
+        d.ellipse([(W - 24) * S, cyd, (W - 20) * S, cyd + 4 * S],
+                  fill=mix(bar_text, bar, 0.15))
 
-    # ---- editor panel (opaque) ----
-    d.rectangle([0, py0, WD * S, HT * S], fill=bg)
-    soft = tuple(int(c + (255 - c) * 0.25) for c in bg)   # bg + 25% white
-    d.line([(0, iy), (WD * S, iy)], fill=soft, width=S)
-    d.line([(0, py0), (WD * S, py0)], fill=soft, width=S)
+    # ---- flame emoji (drawn after text) ----
+    fx = b2[0] + pad_x + b2[4] + 16 * S
+    fy = y2 + pad_y + f_bub.size * 0.45
+    _flame(d, fx, fy, 26 * S)
 
-    show_alpha = active in ("bg", "bar", "in", "out", "accent") or \
-                 (active == "wall" and wall_mode == "flat")
-    a = cats.get(active, wall)
-    a_txt = f" · {a['alpha']}%" if (show_alpha and a.get("alpha")) else ""
-    d.text((16 * S, py0 + 8 * S),
-           f"Editing: {active}  {a['hex']}{a_txt}", font=f_info, fill=W)
+    # ---- gray hint ----
+    hint = "Можно сохранить и применять"
+    hw = d.textlength(hint, font=f_sub)
+    d.text(((W * S - hw) // 2, y2 + b2[3] + 28 * S), hint,
+           font=f_sub, fill=mix(text, bg, 0.35))
 
-    # category chips
-    r = 13 * S
-    gap = (WD * S - 32 * S - 7 * 2 * r) / 6
-    cy2 = py0 + 46 * S
-    for i, (k, lbl) in enumerate(CHIPS):
-        ccx = int(16 * S + r + i * (2 * r + gap))
-        if k == "wall" and wall_mode == "image" and wall_bytes:
-            thumb = _cover(Image.open(io.BytesIO(wall_bytes)), 2 * r, 2 * r)
-            mask = Image.new("L", (2 * r, 2 * r), 0)
-            ImageDraw.Draw(mask).ellipse([0, 0, 2 * r, 2 * r], fill=255)
-            img.paste(thumb, (ccx - r, cy2 - r), mask)
-            d = ImageDraw.Draw(img)
-        else:
-            col = hex_to_rgb(wall["hex"]) if k == "wall" else C[k]
-            d.ellipse([ccx - r, cy2 - r, ccx + r, cy2 + r], fill=col)
-        if k == active:
-            d.ellipse([ccx - r - 4 * S, cy2 - r - 4 * S,
-                       ccx + r + 4 * S, cy2 + r + 4 * S], outline=acc, width=2 * S)
-        lw = d.textlength(lbl, font=f_lbl)
-        d.text((ccx - lw / 2, cy2 + r + 5 * S), lbl, font=f_lbl, fill=W)
+    # ---- input bar ----
+    iy = chat_y1
+    d.rectangle([0, iy, W * S, iy + INPUT_H], fill=mix(bg, text, 0.05))
+    d.line([(0, iy), (W * S, iy)], fill=mix(bg, text, 0.12), width=S)
+    fy0, fy1 = iy + 12 * S, iy + INPUT_H - 12 * S
+    d.rounded_rectangle([46 * S, fy0, W * S - 84 * S, fy1],
+                        radius=(fy1 - fy0) // 2, fill=mix(bg, text, 0.10))
+    ic = mix(text, bg, 0.30)
+    _paperclip(d, 64 * S, iy + INPUT_H // 2, 20 * S, ic)
+    d.text((86 * S, iy + (INPUT_H - f_sub.size) // 2 - 2 * S), "Сообщение...",
+           font=f_sub, fill=mix(text, bg, 0.45))
+    on_acc = readable_on(accent)
+    hh = 20 * S
+    d.polygon([(scx - hh * 0.4, scy - hh * 0.5), (scx - hh * 0.4, scy + hh * 0.5),
+               (scx + hh * 0.6, scy)], fill=on_acc)
 
-    # photo swatches (suggestions — tap to apply)
-    n = min(len(swatches), 6)
-    r_sw = 15 * S
-    gap2 = (WD * S - 40 * S - n * 2 * r_sw) / max(1, n - 1)
-    sy = py0 + 118 * S
-    cur = a["hex"]
-    for i in range(n):
-        x = int(20 * S + r_sw + i * (2 * r_sw + gap2))
-        col = hex_to_rgb(swatches[i])
-        if swatches[i] == cur:
-            d.ellipse([x - r_sw - 4 * S, sy - r_sw - 4 * S,
-                       x + r_sw + 4 * S, sy + r_sw + 4 * S],
-                      outline=acc, width=2 * S)
-        d.ellipse([x - r_sw, sy - r_sw, x + r_sw, sy + r_sw], fill=col)
-        num = str(i + 1)
-        lw = d.textlength(num, font=f_lbl)
-        lum = (0.2126 * col[0] + 0.7152 * col[1] + 0.0722 * col[2]) / 255
-        d.text((x - lw / 2, sy - 6 * S), num, font=f_lbl,
-               fill=(20, 20, 20) if lum > 0.5 else W)
-
-    d.text((16 * S, py0 + 158 * S),
-           "Swatches from your photo — tap one to apply to the selected part",
-           font=f_lbl, fill=W)
-
-    img = img.resize((WD, HT), Image.Resampling.LANCZOS)
+    img = img.resize((W, H), Image.Resampling.LANCZOS)
     buf = io.BytesIO()
     buf.name = "preview.png"
     img.save(buf, "PNG")
