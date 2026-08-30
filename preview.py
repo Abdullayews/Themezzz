@@ -59,7 +59,7 @@ def _paperclip(d, cx, cy, s, col):
 
 
 def render_preview(colors, alphas, wall_bytes, wall_flat):
-    """1:1 copy of the classic Telegram theme-preview chat screen."""
+    """1:1 copy of the classic Telegram theme-preview chat screen (English)."""
     bg, bar = colors["bg"], colors["bar"]
     inb, outb = colors["in"], colors["out"]
     text, accent = colors["text"], colors["accent"]
@@ -119,9 +119,9 @@ def render_preview(colors, alphas, wall_bytes, wall_flat):
         return x, y, bw, bh, tw
 
     y1 = BAR_H + 48 * S
-    b1 = bubble("Привет! Как тебе тема?", inb, A("in"), in_text, False, y1)
+    b1 = bubble("Hi! How's the theme?", inb, A("in"), in_text, False, y1)
     y2 = y1 + b1[3] + 12 * S
-    b2 = bubble("ВЫГЛЯДИТ ОТЛИЧНО", outb, A("out"), out_text, True, y2, flame=True)
+    b2 = bubble("LOOKS GREAT", outb, A("out"), out_text, True, y2, flame=True)
 
     # send button (respects accent transparency)
     scx, scy, sr = W * S - 44 * S, chat_y1 + INPUT_H // 2, 21 * S
@@ -139,9 +139,9 @@ def render_preview(colors, alphas, wall_bytes, wall_flat):
            fill=mix(bar_text, bar, 0.10), width=3 * S)
     acx, acy, ar = 56 * S, BAR_H // 2, 17 * S
     d.ellipse([acx - ar, acy - ar, acx + ar, acy + ar], fill=accent)
-    d.text((acx, acy), "Ч", font=f_av, fill=readable_on(accent), anchor="mm")
-    d.text((82 * S, 8 * S), "Чат", font=f_title, fill=bar_text)
-    d.text((82 * S, 34 * S), "онлайн", font=f_sub, fill=ensure_contrast(accent, bar))
+    d.text((acx, acy), "C", font=f_av, fill=readable_on(accent), anchor="mm")
+    d.text((82 * S, 8 * S), "Chat", font=f_title, fill=bar_text)
+    d.text((82 * S, 34 * S), "online", font=f_sub, fill=ensure_contrast(accent, bar))
     for i in range(3):
         cyd = BAR_H // 2 - 8 * S + i * 8 * S
         d.ellipse([(W - 24) * S, cyd, (W - 20) * S, cyd + 4 * S],
@@ -153,7 +153,7 @@ def render_preview(colors, alphas, wall_bytes, wall_flat):
     _flame(d, fx, fy, 26 * S)
 
     # ---- gray hint ----
-    hint = "Можно сохранить и применять"
+    hint = "You can save and apply it"
     hw = d.textlength(hint, font=f_sub)
     d.text(((W * S - hw) // 2, y2 + b2[3] + 28 * S), hint,
            font=f_sub, fill=mix(text, bg, 0.35))
@@ -167,7 +167,7 @@ def render_preview(colors, alphas, wall_bytes, wall_flat):
                         radius=(fy1 - fy0) // 2, fill=mix(bg, text, 0.10))
     ic = mix(text, bg, 0.30)
     _paperclip(d, 64 * S, iy + INPUT_H // 2, 20 * S, ic)
-    d.text((86 * S, iy + (INPUT_H - f_sub.size) // 2 - 2 * S), "Сообщение...",
+    d.text((86 * S, iy + (INPUT_H - f_sub.size) // 2 - 2 * S), "Message...",
            font=f_sub, fill=mix(text, bg, 0.45))
     on_acc = readable_on(accent)
     hh = 20 * S
