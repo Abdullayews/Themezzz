@@ -12,6 +12,7 @@ from telegram.ext import (
 
 from config import BOT_TOKEN
 from server import start_server
+from keep_alive import start_keep_alive
 from colors import (
     extract_palette, prepare_wallpaper, build_attheme,
     resolve_theme, resolve_wall, rgb_to_hex,
@@ -25,13 +26,20 @@ HEX_RE = re.compile(r"^#?\s*([0-9a-fA-F]{6})$")
 
 SECTIONS = [
     ("bg", "🖼 BG"), ("bar", "📊 Bar"), ("in", "📥 In"), ("out", "📤 Out"),
-    ("text", "✏️ Text"), ("accent", "🔵 Accent"), ("wall", "🌇 Wall"),
+    ("text", "✏️ Text"), ("accent", "🔵 Accent"), ("reply", "🏷 Reply"),
+    ("wall", "🌇 Wall"),
 ]
 SEC_LABEL = dict(SECTIONS)
 SEC_FULL = {"bg": "Background", "bar": "Top bar", "in": "Incoming bubble",
             "out": "Outgoing bubble", "text": "Text", "accent": "Accent",
-            "wall": "Wallpaper"}
-ALPHA_SECTIONS = ("bg", "bar", "in", "out", "text", "accent")
+            "reply": "Reply (tag)", "wall": "Wallpaper"}
+
+# Sections with a color choice
+COLOR_SECTIONS = ("bg", "bar", "in", "out", "text", "accent", "reply")
+# Sections with a transparency slider.
+# ⚠️ "bg" excluded on purpose: transparent windows broke the drawer
+# and the forward screen — those are always solid now.
+ALPHA_SECTIONS = ("bar", "in", "out", "text", "accent", "reply")
 
 WELCOME = (
     "🎨 <b>Theme Creator</b>\n\n"
@@ -39,10 +47,11 @@ WELCOME = (
     "<b>How it works</b>\n"
     "1️⃣ Send me any image — I grab its colors\n"
     "2️⃣ Pick 🌙 Dark or ☀️ Light mode\n"
-    "3️⃣ Pick a part: BG, Bar, In/Out bubbles, Text, Accent, Wallpaper\n"
+    "3️⃣ Pick a part: BG, Bar, In/Out bubbles, Text, Accent, Reply, Wallpaper\n"
     "4️⃣ Choose a color (⚡ auto, №1-6 suggested, or type #hex)\n"
     "    and set transparency with the slider\n"
     "5️⃣ ✅ Create theme — done!\n\n"
+    "🏷 Reply section = username + quoted text in replies (white by default)\n"
     "🔄 Reset clears only the part you're editing.\n"
     "📸 <b>Send a picture to start!</b>"
 )
@@ -55,7 +64,7 @@ def default_state(palette, wall_bytes):
         "palette": palette,                       # 6 suggested colors
         "mode": "dark",                           # 🌗 general coloring theme
         "sections": {k: {"idx": -1, "alpha": 0, "custom": None}
-                     for k in ALPHA_SECTIONS},
+                     for k in COLOR_SECTIONS},
         "active": "bg",
         "wall_mode": "image" if wall_bytes else "flat",
         "wall_idx": -1,
@@ -105,7 +114,7 @@ def caption(st):
             return rgb_to_hex(resolve_wall(st["palette"], st["wall_idx"],
                                            st["wall_custom"], st["mode"]))
         s = st["sections"][k]
-        tr = f" · {s['alpha']}%" if s["alpha"] else ""
+        tr = f" · {s['alpha']}%" if (k in ALPHA_SECTIONS and s["alpha"]) else ""
         return rgb_to_hex(res[k]) + tr
 
     lines = [
@@ -113,9 +122,9 @@ def caption(st):
         f"🌗 Mode: <b>{'Dark' if st['mode'] == 'dark' else 'Light'}</b>",
         "──────────────",
     ]
-    for a, b in (("bg", "bar"), ("in", "out"), ("text", "accent")):
+    for a, b in (("bg", "bar"), ("in", "out"),
+                 ("text", "accent"), ("reply", "wall")):
         lines.append(f"{SEC_LABEL[a]} {fmt(a)}   {SEC_LABEL[b]} {fmt(b)}")
-    lines.append(f"{SEC_LABEL['wall']} {fmt('wall')}")
     lines.append("──────────────")
     lines.append(f"▸ Editing: <b>{SEC_FULL[st['active']]}</b>")
     pal = st["palette"]
@@ -167,16 +176,18 @@ def keyboard(st):
             row.append(InlineKeyboardButton("🎯●", callback_data="noop"))
         rows.append(row)
 
-        a = st["sections"][st["active"]]["alpha"]
-        rows.append([
-            InlineKeyboardButton("-10", callback_data="a:-10"),
-            InlineKeyboardButton("-5", callback_data="a:-5"),
-            InlineKeyboardButton(f"🫧 {a}%", callback_data="noop"),
-            InlineKeyboardButton("+5", callback_data="a:5"),
-            InlineKeyboardButton("+10", callback_data="a:10"),
-        ])
-        rows.append([InlineKeyboardButton(f"{v}%", callback_data=f"s:{v}")
-                     for v in (0, 25, 50, 75, 100)])
+        # slider only for sections that support transparency
+        if st["active"] in ALPHA_SECTIONS:
+            a = st["sections"][st["active"]]["alpha"]
+            rows.append([
+                InlineKeyboardButton("-10", callback_data="a:-10"),
+                InlineKeyboardButton("-5", callback_data="a:-5"),
+                InlineKeyboardButton(f"🫧 {a}%", callback_data="noop"),
+                InlineKeyboardButton("+5", callback_data="a:5"),
+                InlineKeyboardButton("+10", callback_data="a:10"),
+            ])
+            rows.append([InlineKeyboardButton(f"{v}%", callback_data=f"s:{v}")
+                         for v in (0, 25, 50, 75, 100)])
 
     rows.append([
         InlineKeyboardButton("✅ Create theme", callback_data="make"),
@@ -390,7 +401,8 @@ def main():
     if not BOT_TOKEN:
         raise SystemExit("❌ BOT_TOKEN is not set!")
 
-    start_server()
+    start_server()       # Render port requirement
+    start_keep_alive()   # 24/7: self-ping every 9 min prevents spin-down
 
     try:
         asyncio.get_event_loop()
@@ -404,7 +416,7 @@ def main():
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_error_handler(on_error)
 
-    logger.info("🚀 Theme bot is up")
+    logger.info("🚀 Theme bot is up (24/7 keep-alive active)")
     app.run_polling(drop_pending_updates=True)
 
 
