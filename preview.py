@@ -5,18 +5,15 @@ from PIL import Image, ImageDraw, ImageFont
 from colors import M3Palette, hex_to_rgb, OUT_TONES
 
 
-def _font(sz: int):
-    for path in (
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans.ttf",
-        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-    ):
+def _font(size):
+    for path in ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                 "/usr/share/fonts/TTF/DejaVuSans.ttf"):
         try:
-            return ImageFont.truetype(path, sz)
+            return ImageFont.truetype(path, size)
         except Exception:
             continue
     try:
-        return ImageFont.load_default(size=sz)
+        return ImageFont.load_default(size=size)
     except TypeError:
         return ImageFont.load_default()
 
@@ -25,21 +22,21 @@ def _cover(img, w, h):
     """Crop image to fully cover the w×h area."""
     iw, ih = img.size
     scale = max(w / iw, h / ih)
-    img = img.resize((int(iw * scale) + 1, int(ih * scale) + 1), Image.Resampling.LANCZOS)
+    img = img.resize((int(iw * scale) + 1, int(ih * scale) + 1),
+                     Image.Resampling.LANCZOS)
     x, y = (img.width - w) // 2, (img.height - h) // 2
     return img.crop((x, y, x + w, y + h))
 
 
-def render_preview(seed_hex, style, alpha_pct, role, chroma, contrast,
-                   swatches, sel, info_text, wall_bytes):
-    p = M3Palette(seed_hex, chroma)
+def render_preview(seed_hex, style, alpha_pct, role, swatches, sel, wall_bytes):
+    """Renders the live preview image. Caller handles any exception."""
+    p = M3Palette(seed_hex)
     dark = style == "dark"
     S = 2                       # supersampling → sharp text
     W, H = 460, 820
 
-    sh = (-4 * contrast) if dark else (4 * contrast)
-    N = lambda t: p.neutral(t + (sh if t <= 60 else 0))
-    NV = lambda t: p.neutral_variant(t + (sh if t <= 60 else 0))
+    N = lambda t: p.neutral(t)
+    NV = lambda t: p.neutral_variant(t)
     P = lambda t: p.primary(t)
     out_fn = getattr(p, role)
     out_t = OUT_TONES[role][0 if dark else 1]
@@ -52,12 +49,12 @@ def render_preview(seed_hex, style, alpha_pct, role, chroma, contrast,
         img = Image.alpha_composite(base, tint).convert("RGB")
     else:
         img = Image.new("RGB", (W * S, H * S))
+        d0 = ImageDraw.Draw(img)
         top, bot = (N(7), N(18)) if dark else (N(86), N(95))
-        d = ImageDraw.Draw(img)
         for y in range(H * S):
             k = y / (H * S)
-            d.line([(0, y), (W * S, y)],
-                   fill=tuple(int(a + (b - a) * k) for a, b in zip(top, bot)))
+            d0.line([(0, y), (W * S, y)],
+                    fill=tuple(int(a + (b - a) * k) for a, b in zip(top, bot)))
 
     f_title, f_text, f_small = _font(30 * S), _font(23 * S), _font(18 * S)
     d = ImageDraw.Draw(img)
@@ -67,7 +64,6 @@ def render_preview(seed_hex, style, alpha_pct, role, chroma, contrast,
     d.text((26 * S, 16 * S), "Material You", font=f_title, fill=N(96 if dark else 8))
     d.text((26 * S, 58 * S), "theme preview", font=f_small, fill=N(58 if dark else 48))
     d.ellipse([(W - 66) * S, 26 * S, (W - 26) * S, 66 * S], fill=P(65 if dark else 45))
-    # Small circle showing the current seed color
     d.ellipse([(W - 100) * S, 34 * S, (W - 72) * S, 62 * S],
               fill=hex_to_rgb(seed_hex), outline=N(100 if dark else 0), width=2 * S)
 
@@ -81,7 +77,7 @@ def render_preview(seed_hex, style, alpha_pct, role, chroma, contrast,
     od.rounded_rectangle([cx, cy, cx + chip_w, cy + chip_h],
                          radius=chip_h // 2, fill=N(45) + (102,))
 
-    def add_bubble(lines_text, fill, out=False, y=190 * S):
+    def bubble(lines_text, fill, out=False, y=190 * S):
         pad, lh = 18 * S, 32 * S
         w = max(d.textlength(t, font=f_text) for t in lines_text) + pad * 2
         h = len(lines_text) * lh + pad * 2 + 26 * S
@@ -89,13 +85,13 @@ def render_preview(seed_hex, style, alpha_pct, role, chroma, contrast,
         od.rounded_rectangle([x, y, x + w, y + h], radius=26 * S, fill=fill + (alpha,))
         return x, y, w, h, pad, lh, lines_text
 
-    b1 = add_bubble(["Hi! Building your", "new theme"], NV(24 if dark else 92))
-    b2 = add_bubble(["Looks great!"], out_fn(out_t), out=True, y=400 * S)
+    b1 = bubble(["Hi! Building your", "new theme"], NV(24 if dark else 92))
+    b2 = bubble(["Looks great!"], out_fn(out_t), out=True, y=400 * S)
 
     img = Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")
     d = ImageDraw.Draw(img)
 
-    def draw_texts(b, tcol, timecol, time):
+    def texts(b, tcol, timecol, time):
         x, y, w, h, pad, lh, lines = b
         ty = y + pad - 4 * S
         for t in lines:
@@ -104,40 +100,23 @@ def render_preview(seed_hex, style, alpha_pct, role, chroma, contrast,
         tw = d.textlength(time, font=f_small)
         d.text((x + w - pad - tw, y + h - pad - 24 * S), time, font=f_small, fill=timecol)
 
-    draw_texts(b1, N(95 if dark else 12), N(60 if dark else 50), "14:32")
-    draw_texts(b2, N(98 if dark else 100), N(80 if dark else 60), "14:33")
+    texts(b1, N(95 if dark else 12), N(60 if dark else 50), "14:32")
+    texts(b2, N(98 if dark else 100), N(80 if dark else 60), "14:33")
     d.text(((W * S - d.textlength("Today", font=f_small)) // 2, cy + 9 * S),
            "Today", font=f_small, fill=N(100))
 
-    # ---- Settings panel with color swatches ----
-    panel_y0, panel_y1 = 556 * S, 716 * S
-    d.rounded_rectangle([16 * S, panel_y0, (W - 16) * S, panel_y1],
-                        radius=22 * S, fill=N(16 if dark else 96))
+    # ---- Color swatches panel ----
+    p0, p1 = 556 * S, 716 * S
+    d.rounded_rectangle([16 * S, p0, (W - 16) * S, p1], radius=22 * S,
+                        fill=N(16 if dark else 96))
+    info = f"{style.capitalize()}  |  {alpha_pct}% transparent  |  {seed_hex}"
+    d.text((32 * S, p0 + 16 * S), info, font=f_small, fill=N(72 if dark else 42))
 
-    # Info text (greedy word wrap, max 3 lines)
-    max_w = (W - 64) * S
-    words, info_lines, cur = info_text.split(" "), [], ""
-    for w_ in words:
-        t = (cur + " " + w_).strip()
-        if d.textlength(t, font=f_small) <= max_w:
-            cur = t
-        else:
-            if cur:
-                info_lines.append(cur)
-            cur = w_
-    if cur:
-        info_lines.append(cur)
-    ty = panel_y0 + 12 * S
-    for ln in info_lines[:3]:
-        d.text((32 * S, ty), ln, font=f_small, fill=N(72 if dark else 42))
-        ty += 26 * S
-
-    # Swatch circles (numbered; "C" = custom color)
     n = len(swatches)
     r = 22 * S
     spacing = (W * S - 120 * S) / max(1, n - 1)
     x0 = 60 * S
-    cyc = panel_y1 - 58 * S
+    cyc = p1 - 60 * S
     for i, hexcol in enumerate(swatches):
         ccx = int(x0 + i * spacing)
         if i == sel:
@@ -150,7 +129,7 @@ def render_preview(seed_hex, style, alpha_pct, role, chroma, contrast,
         d.text((ccx - tw / 2, cyc + r + 4 * S), label, font=f_small,
                fill=N(85 if dark else 20))
 
-    # ---- Message input panel ----
+    # ---- Input bar ----
     d.rectangle([0, H * S - 96 * S, W * S, H * S], fill=N(15 if dark else 96))
     d.text((70 * S, H * S - 58 * S), "Write a message...", font=f_text,
            fill=N(50 if dark else 45))
@@ -162,6 +141,7 @@ def render_preview(seed_hex, style, alpha_pct, role, chroma, contrast,
 
     img = img.resize((W, H), Image.Resampling.LANCZOS)
     buf = io.BytesIO()
+    buf.name = "preview.png"
     img.save(buf, "PNG")
     buf.seek(0)
     return buf
