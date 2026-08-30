@@ -83,7 +83,7 @@ def extract_palette(data: bytes, count: int = 5) -> list:
 def prepare_wallpaper(data: bytes, max_side: int = 1440, quality: int = 82) -> bytes:
     """Downscale the image to be embedded into the .attheme (keeps file size sane)."""
     img = Image.open(io.BytesIO(data)).convert("RGB")
-    img.thumbnail((max_side, max_side), Image.LANCZOS)
+    img.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, "JPEG", quality=quality)
     return buf.getvalue()
