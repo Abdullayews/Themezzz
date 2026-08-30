@@ -8,7 +8,6 @@ FALLBACK_PALETTE = ["#23272e", "#333a45", "#4a90d9", "#7e57c2", "#26a69a", "#ef6
 AV = ["Blue", "Cyan", "Green", "Orange", "Pink", "Red", "Violet"]
 
 # Links keep Telegram's classic blue in every theme — never themed.
-# Change this one constant if you prefer another shade (e.g. #2678b6).
 LINK_BLUE = (0x27, 0x82, 0xE9)
 
 
@@ -132,7 +131,7 @@ def prepare_wallpaper(data: bytes, max_side: int = 1080, quality: int = 75) -> b
 def resolve_theme(palette: list, sections: dict, mode: str = "dark") -> dict:
     """
     Auto values are driven by dark/light MODE:
-      dark  → truly dark bg, WHITE text, vivid accent
+      dark  → truly dark bg, WHITE text (incl. reply), vivid accent
       light → truly light bg, near-black text, deep accent
     Manual picks (idx / custom hex) always win.
     """
@@ -152,22 +151,20 @@ def resolve_theme(palette: list, sections: dict, mode: str = "dark") -> dict:
     lightest = max(pal, key=luminance)
     most_sat = max(pal, key=saturation)
 
-    # --- auto colors, forced to proper dark/light (fixes "too light") ---
     auto_bg = set_lightness(darkest, 0.07) if dark else set_lightness(lightest, 0.96)
     auto_text = (255, 255, 255) if dark else (22, 24, 29)
     auto_accent = clamp_lightness(most_sat, min_l=0.62) if dark \
         else clamp_lightness(most_sat, max_l=0.42)
-    auto_bar = auto_bg
-    auto_in = mix(auto_bg, auto_text, 0.10)
-    auto_out = auto_accent
 
     res = {}
     res["bg"] = chosen("bg") or auto_bg
     res["text"] = chosen("text") or auto_text
     res["accent"] = chosen("accent") or auto_accent
-    res["bar"] = chosen("bar") or auto_bar
-    res["in"] = chosen("in") or auto_in
-    res["out"] = chosen("out") or auto_out
+    res["bar"] = chosen("bar") or res["bg"]
+    res["in"] = chosen("in") or mix(res["bg"], res["text"], 0.10)
+    res["out"] = chosen("out") or res["accent"]
+    # Reply (tag) block: username + quoted text — WHITE by default
+    res["reply"] = chosen("reply") or auto_text
     return res
 
 
@@ -188,19 +185,24 @@ def resolve_wall(palette: list, wall_idx, wall_custom, mode: str = "dark"):
 def build_attheme(colors: dict, alphas: dict,
                   wallpaper: bytes | None = None, wall_flat=None) -> bytes:
     """
-    colors: bg, bar, in, out, text, accent (RGB tuples)
-    alphas: per-section transparency 0..100
+    colors: bg, bar, in, out, text, accent, reply (RGB tuples)
+    alphas: per-section transparency 0..100 (bar, in, out, text, accent, reply)
+
+    NOTE: structural screens (drawer, forward screen, windows, dialogs) are
+    ALWAYS fully opaque — transparency there is broken-looking.
     """
     bg, bar = colors["bg"], colors["bar"]
     inb, outb = colors["in"], colors["out"]
     text, accent = colors["text"], colors["accent"]
+    reply = colors["reply"]
 
     def A(k):
         return max(0, min(255, round(255 * (1 - alphas.get(k, 0) / 100.0))))
 
-    a_bg, a_bar = A("bg"), A("bar")
+    a_bar = A("bar")
     a_in, a_out = A("in"), A("out")
     a_text, a_acc = A("text"), A("accent")
+    a_reply = A("reply")
 
     # ---- derived tones (all from user's colors) ----
     dark = luminance(bg) < 0.5
@@ -215,6 +217,8 @@ def build_attheme(colors: dict, alphas: dict,
     on_acc = readable_on(accent)
     acc_in = ensure_contrast(accent, inb)
     acc_out = ensure_contrast(accent, outb)
+    reply_in = ensure_contrast(reply, inb)
+    reply_out = ensure_contrast(reply, outb)
     gray1 = mix(text, bg, 0.30)
     gray2 = mix(text, bg, 0.45)
     gray3 = mix(text, bg, 0.55)
@@ -229,6 +233,11 @@ def build_attheme(colors: dict, alphas: dict,
     in_sel = mix(inb, in_text, 0.12)
     out_sel = mix(outb, out_text, 0.12)
 
+    # Circle buttons (FAB etc.) — darker accent so they don't glare
+    fab = mix(accent, (0, 0, 0), 0.32 if dark else 0.18)
+    fab_pressed = mix(fab, (0, 0, 0), 0.15)
+    on_fab = readable_on(fab)
+
     M = {}
 
     def put(keys, rgb, alpha=255):
@@ -241,22 +250,22 @@ def build_attheme(colors: dict, alphas: dict,
     put(["windowBackgroundWhiteLinkText", "dialogTextLink", "chat_messageLinkIn",
          "chat_messageLinkOut", "chat_serviceLink"], LINK_BLUE)
 
-    # ===== Background / surfaces =====
-    put("windowBackgroundWhite", bg, a_bg)
-    put(["windowBackgroundGray", "dialogBackgroundGray"], surface2, a_bg)
+    # ===== Background / surfaces — ALWAYS OPAQUE (fixes drawer + forward) =====
+    put("windowBackgroundWhite", bg)
+    put(["windowBackgroundGray", "dialogBackgroundGray"], surface2)
     put(["windowBackgroundBlack", "chats_menuBackground", "chats_pinnedOverlay",
          "chat_emojiPanelBackground", "chat_stickersHintPanel",
          "chat_recordedVoiceBackground", "contacts_inviteBackground",
          "chat_topPanelBackground", "musicPicker_buttonBackground",
          "chats_archiveBackground", "chat_unreadMessagesStartBackground",
-         "key_chat_messagePanelVoiceLockBackground"], surface, a_bg)
+         "key_chat_messagePanelVoiceLockBackground"], surface)
     put(["dialogBackground", "graySection", "player_background",
          "inappPlayerBackground", "profile_actionBackground",
          "actionBarDefaultSubmenuBackground", "sharedMedia_actionMode",
          "returnToCallBackground", "player_actionBar", "player_actionBarTop"],
-        bg, a_bg)
+        bg)
     put(["chat_messagePanelBackground", "chat_messagePanelVoiceBackground"],
-        surface2, a_bg)
+        surface2)
     put(["chat_messagePanelShadow", "key_chat_messagePanelVoiceLockShadow",
          "ChatShadow", "chat_goDownButtonShadow"], shadow, 80)
     put(["files_folderIconBackground", "chat_secretTimerBackground"], surface3, 220)
@@ -265,8 +274,8 @@ def build_attheme(colors: dict, alphas: dict,
 
     # ===== Top bar =====
     put(["actionBarDefault", "actionBarDefaultArchived",
-         "actionBarActionModeDefaultTop"] +
-        [f"avatar_backgroundActionBar{c}" for c in AV], bar, a_bar)
+         "actionBarActionModeDefaultTop"], bar, a_bar)
+    put([f"avatar_backgroundActionBar{c}" for c in AV], bar)  # avatars: opaque
     put("actionBarActionModeDefault", mix(bar, accent, 0.20), a_bar)
     put(["actionBarDefaultTitle", "actionBarDefaultArchivedTitle",
          "actionBarDefaultSearch", "actionBarDefaultArchivedSearch",
@@ -300,9 +309,7 @@ def build_attheme(colors: dict, alphas: dict,
     put("chat_inBubbleShadow", shadow)
     put("chat_messageTextIn", in_text, a_text)
     put(["chat_inTimeText", "chat_inTimeSelectedText"], in_time)
-    put(["chat_inReplyLine", "chat_inReplyNameText"], acc_in)
-    put(["chat_inReplyMessageText", "chat_inReplyMediaMessageText",
-         "chat_inReplyMediaMessageSelectedText"], mix(in_text, inb, 0.30))
+    put("chat_inReplyLine", acc_in)
     put(["chat_inAudioDurationText", "chat_inAudioDurationSelectedText",
          "chat_inAudioTitleText", "chat_inFileNameText", "chat_inFileInfoText",
          "chat_inFileInfoSelectedText", "chat_inContactNameText",
@@ -338,9 +345,7 @@ def build_attheme(colors: dict, alphas: dict,
     put("chat_outBubbleShadow", shadow)
     put("chat_messageTextOut", out_text, a_text)
     put(["chat_outTimeText", "chat_outTimeSelectedText"], out_time)
-    put(["chat_outReplyLine", "chat_outReplyNameText"], acc_out)
-    put(["chat_outReplyMessageText", "chat_outReplyMediaMessageText",
-         "chat_outReplyMediaMessageSelectedText"], mix(out_text, outb, 0.30))
+    put("chat_outReplyLine", acc_out)
     put(["chat_outAudioDurationText", "chat_outAudioDurationSelectedText",
          "chat_outAudioTitleText", "chat_outFileNameText", "chat_outFileInfoText",
          "chat_outFileInfoSelectedText", "chat_outContactNameText",
@@ -372,6 +377,16 @@ def build_attheme(colors: dict, alphas: dict,
         mix(outb, out_text, 0.06))
     put(["chat_outLoaderPhotoIcon", "chat_outLoaderPhotoIconSelected"], out_text)
     put("chat_outLoaderSelected", mix(out_text, outb, 0.45))
+
+    # ===== Reply (tag) block — user name + quoted text =====
+    put(["chat_inReplyNameText", "chat_inReplyMessageText",
+         "chat_inReplyMediaMessageText",
+         "chat_inReplyMediaMessageSelectedText"], reply_in, a_reply)
+    put(["chat_outReplyNameText", "chat_outReplyMessageText",
+         "chat_outReplyMediaMessageText",
+         "chat_outReplyMediaMessageSelectedText"], reply_out, a_reply)
+    put(["chat_stickerReplyNameText", "chat_stickerReplyMessageText"],
+        ensure_contrast(reply, bg), a_reply)
 
     # ===== Text / UI =====
     put(["windowBackgroundWhiteBlackText", "chats_name", "chats_nameMessage",
@@ -425,18 +440,17 @@ def build_attheme(colors: dict, alphas: dict,
          "chat_botSwitchToInlineText", "dialogInputFieldActivated",
          "groupcreate_cursor", "groupcreate_onlineText",
          "chat_messagePanelSend", "chat_unreadMessagesStartText",
-         "chat_editDoneIcon", "chat_stickerReplyNameText", "chats_sentCheck",
-         "chats_sentClock", "chats_sentReadCheck",
-         "sharedMedia_startStopLoadIcon", "PreviewBack",
-         "PreviewBackLinear"], acc_text, a_acc)
+         "chat_editDoneIcon", "chats_sentCheck", "chats_sentClock",
+         "chats_sentReadCheck", "sharedMedia_startStopLoadIcon",
+         "PreviewBack", "PreviewBackLinear"], acc_text, a_acc)
     put(["chats_unreadCounter", "chats_verifiedBackground",
-         "chats_archivePinBackground", "chats_actionBackground",
+         "chats_archivePinBackground",
          "chat_attachGalleryBackground", "chat_attachVideoBackground",
          "chat_attachAudioBackground", "chat_attachFileBackground",
          "chat_attachContactBackground", "chat_attachLocationBackground",
          "chat_attachHideBackground", "chat_attachSendBackground",
          "chat_attachMediaBanBackground", "undo_background", "picker_badge",
-         "dialogBadgeBackground", "dialogFloatingButton", "checkbox",
+         "dialogBadgeBackground", "checkbox",
          "checkboxSquareBackground", "dialogCheckboxSquareBackground",
          "radioBackgroundChecked", "dialogRadioBackgroundChecked",
          "dialogRoundCheckBox", "switchTrackChecked", "switch2TrackChecked",
@@ -445,12 +459,11 @@ def build_attheme(colors: dict, alphas: dict,
          "featuredStickers_addButton", "location_sendLocationBackground",
          "location_sendLiveLocationBackground",
          "location_placeLocationBackground", "chat_messagePanelVoicePressed",
-         "chat_goDownButtonCounterBackground", "chat_botProgress"],
-        accent, a_acc)
+         "chat_botProgress"], accent, a_acc)
     put(["chats_unreadCounterText", "chats_verifiedCheck", "picker_badgeText",
          "dialogBadgeText", "checkboxCheck", "checkboxSquareCheck",
          "dialogCheckboxSquareCheck", "dialogRoundCheckBoxCheck",
-         "dialogFloatingIcon", "featuredStickers_buttonText", "files_iconText",
+         "featuredStickers_buttonText", "files_iconText",
          "undo_cancelColor", "undo_infoColor", "chat_attachGalleryIcon",
          "chat_attachVideoIcon", "chat_attachFileIcon",
          "chat_attachContactIcon", "chat_attachLocationIcon",
@@ -460,9 +473,14 @@ def build_attheme(colors: dict, alphas: dict,
          "chat_attachCameraIcon4", "chat_attachCameraIcon5",
          "chat_attachCameraIcon6", "location_sendLocationIcon",
          "musicPicker_checkboxCheck", "groupcreate_checkboxCheck",
-         "chats_menuItemCheck", "chats_actionIcon"], on_acc)
+         "chats_menuItemCheck"], on_acc)
+
+    # ===== Circle buttons (FAB) — DARKER accent =====
+    put(["chats_actionBackground", "dialogFloatingButton",
+         "chat_goDownButtonCounterBackground"], fab)
     put(["chats_actionPressedBackground", "dialogFloatingButtonPressed",
-         "featuredStickers_addButtonPressed"], mix(accent, on_acc, 0.25))
+         "featuredStickers_addButtonPressed"], fab_pressed)
+    put(["chats_actionIcon", "dialogFloatingIcon"], on_fab)
 
     # ===== Switches / checkboxes =====
     put(["switchTrack", "switch2Track"], mix(bg, text, 0.25), 140)
@@ -506,7 +524,7 @@ def build_attheme(colors: dict, alphas: dict,
     put("chat_emojiPanelNewTrending", red)
     put("chat_emojiPanelTrendingDescription", gray2)
     put(["chat_emojiPanelStickerSetNameIcon", "chat_stickerViaBotNameText",
-         "chat_stickerReplyLine", "chat_stickerReplyMessageText"], gray2)
+         "chat_stickerReplyLine"], gray2)
 
     # ===== Player =====
     put("player_progress", accent)
