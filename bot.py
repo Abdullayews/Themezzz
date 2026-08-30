@@ -14,7 +14,7 @@ from config import BOT_TOKEN
 from server import start_server
 from colors import (
     extract_palette, prepare_wallpaper, build_attheme,
-    DEFAULT_CATS, DEFAULT_WALL,
+    resolve_theme, resolve_wall, rgb_to_hex,
 )
 from preview import render_preview
 
@@ -23,143 +23,139 @@ logger = logging.getLogger("theme_bot")
 
 HEX_RE = re.compile(r"^#?\s*([0-9a-fA-F]{6})$")
 
-CATS = [
+SECTIONS = [
     ("bg", "🖼 BG"), ("bar", "📊 Bar"), ("in", "📥 In"), ("out", "📤 Out"),
-    ("link", "🔗 Link"), ("accent", "🔵 Accent"), ("wall", "🌇 Wall"),
+    ("text", "✏️ Text"), ("accent", "🔵 Accent"), ("wall", "🌇 Wall"),
 ]
-CAT_LABEL = dict(CATS)
-ALPHA_CATS = {"bg", "bar", "in", "out", "accent"}
+SEC_LABEL = dict(SECTIONS)
+SEC_FULL = {"bg": "Background", "bar": "Top bar", "in": "Incoming bubble",
+            "out": "Outgoing bubble", "text": "Text", "accent": "Accent",
+            "wall": "Wallpaper"}
+ALPHA_SECTIONS = ("bg", "bar", "in", "out", "text", "accent")
 
 WELCOME = (
     "🎨 <b>Theme Creator</b>\n\n"
-    "Hi! I build a Telegram theme (.attheme) from <b>your</b> choices — "
-    "I never invent colors.\n\n"
+    "Hi! I build Telegram themes (.attheme) from your picture.\n\n"
     "<b>How it works</b>\n"
-    "1️⃣ Send me any picture — it becomes the wallpaper and its colors "
-    "appear as suggested swatches\n"
-    "2️⃣ Pick each part: <b>BG, Bar, In/Out bubbles, Link, Accent, Wallpaper</b>\n"
-    "3️⃣ For every part: choose a color (swatch or type #rrggbb) and set "
-    "its <b>own</b> transparency\n"
-    "4️⃣ ✅ Create theme\n\n"
-    "✏️ Note: all text is always <b>white</b> — links are the only "
-    "colored text.\n\n"
+    "1️⃣ Send me any image — I grab its colors\n"
+    "2️⃣ Pick a part: BG, Bar, In/Out bubbles, Text, Accent, Wallpaper\n"
+    "3️⃣ Choose a color (⚡ auto, №1-6 suggested, or type #hex)\n"
+    "    and set transparency with the slider\n"
+    "4️⃣ ✅ Create theme — done!\n\n"
+    "🔄 Reset clears only the part you're editing.\n"
     "📸 <b>Send a picture to start!</b>"
 )
 
 
 # ---------- State ----------
 
-def new_state(swatches, wall_bytes):
+def default_state(palette, wall_bytes):
     return {
-        "swatches": swatches,
-        "wall_bytes": wall_bytes,
-        "cats": {k: dict(v) for k, v in DEFAULT_CATS.items()},
-        "wall": dict(DEFAULT_WALL),
-        "wall_mode": "image" if wall_bytes else "flat",
+        "palette": palette,                       # 6 suggested colors
+        "sections": {k: {"idx": -1, "alpha": 0, "custom": None}
+                     for k in ALPHA_SECTIONS},
         "active": "bg",
+        "wall_mode": "image" if wall_bytes else "flat",
+        "wall_idx": -1,
+        "wall_custom": None,
+        "wall_bytes": wall_bytes,
         "msg_id": None,
         "mode": "photo",
     }
 
 
-def active_hex(st):
+def active_color_state(st):
     if st["active"] == "wall":
-        return st["wall"]["hex"]
-    return st["cats"][st["active"]]["hex"]
+        return {"idx": st["wall_idx"], "custom": st["wall_custom"]}
+    return st["sections"][st["active"]]
 
 
-def active_alpha(st):
+def set_color_idx(st, idx):
     if st["active"] == "wall":
-        return st["wall"]["alpha"]
-    return st["cats"][st["active"]]["alpha"]
+        st["wall_idx"] = idx
+        st["wall_custom"] = None
+    else:
+        s = st["sections"][st["active"]]
+        s["idx"] = idx
+        s["custom"] = None
 
 
-def set_active_hex(st, hexcol):
+def set_custom(st, hexcol):
     if st["active"] == "wall":
-        st["wall"]["hex"] = hexcol
         st["wall_mode"] = "flat"
+        st["wall_custom"] = hexcol
+        st["wall_idx"] = -1
     else:
-        st["cats"][st["active"]]["hex"] = hexcol
-
-
-def set_active_alpha(st, val):
-    val = max(0, min(100, val))
-    if st["active"] == "wall":
-        st["wall"]["alpha"] = val
-    else:
-        st["cats"][st["active"]]["alpha"] = val
-
-
-def slider_shown(st):
-    if st["active"] in ALPHA_CATS:
-        return True
-    return st["active"] == "wall" and st["wall_mode"] == "flat"
+        s = st["sections"][st["active"]]
+        s["custom"] = hexcol
+        s["idx"] = -1
 
 
 # ---------- UI ----------
 
 def caption(st):
-    rows = ["🎨 <b>Theme Editor</b> — every color is your pick", "────────────"]
-    for k, lbl in CATS:
-        mark = "▸ " if st["active"] == k else "· "
+    res = resolve_theme(st["palette"], st["sections"])
+
+    def fmt(k):
         if k == "wall":
             if st["wall_mode"] == "image" and st["wall_bytes"]:
-                val = "your image"
-            else:
-                val = st["wall"]["hex"]
-                if st["wall"]["alpha"]:
-                    val += f" · {st['wall']['alpha']}%"
-        else:
-            c = st["cats"][k]
-            val = c["hex"]
-            if k in ALPHA_CATS and c["alpha"]:
-                val += f" · {c['alpha']}%"
-        rows.append(f"{mark}{lbl}: <b>{val}</b>")
-    rows += [
-        "────────────",
-        "✏️ Text is always <b>white</b> — only links use the 🔗 color.",
-        f"Now editing: <b>{CAT_LABEL[st['active']]}</b> — tap a swatch "
-        "or type <code>#rrggbb</code>",
-    ]
-    if slider_shown(st):
-        rows.append("🫧 The slider sets transparency for THIS part only")
-    return "\n".join(rows)
+                return "image"
+            return rgb_to_hex(resolve_wall(st["palette"], st["wall_idx"],
+                                           st["wall_custom"]))
+        s = st["sections"][k]
+        tr = f" · {s['alpha']}%" if s["alpha"] else ""
+        return rgb_to_hex(res[k]) + tr
 
-
-def swatch_row(st):
-    cur = active_hex(st)
-    row = []
-    for i, hexcol in enumerate(st["swatches"][:6]):
-        mark = "●" if cur == hexcol else ""
-        row.append(InlineKeyboardButton(f"{mark}{i + 1}", callback_data=f"sw:{i}"))
-    if cur not in st["swatches"]:
-        row.append(InlineKeyboardButton("🎯", callback_data="noop"))
-    return row
+    lines = ["🎨 <b>Theme Editor</b>", "──────────────"]
+    for a, b in (("bg", "bar"), ("in", "out"), ("text", "accent")):
+        lines.append(f"{SEC_LABEL[a]} {fmt(a)}   {SEC_LABEL[b]} {fmt(b)}")
+    lines.append(f"{SEC_LABEL['wall']} {fmt('wall')}")
+    lines.append("──────────────")
+    lines.append(f"▸ Editing: <b>{SEC_FULL[st['active']]}</b>")
+    pal = st["palette"]
+    lines.append("⚡ auto  " + "  ".join(f"{i+1} {h}" for i, h in enumerate(pal[:3])))
+    lines.append("          " + "  ".join(f"{i+4} {h}" for i, h in enumerate(pal[3:6])))
+    lines.append("Type your own: <code>#34c7a4</code>")
+    return "\n".join(lines)
 
 
 def keyboard(st):
-    act = st["active"]
     rows = [
-        [InlineKeyboardButton(("● " if act == k else "") + lbl, callback_data=f"sec:{k}")
-         for k, lbl in CATS[:4]],
-        [InlineKeyboardButton(("● " if act == k else "") + lbl, callback_data=f"sec:{k}")
-         for k, lbl in CATS[4:]],
+        [InlineKeyboardButton(("● " if st["active"] == k else "") + lbl,
+                              callback_data=f"sec:{k}") for k, lbl in SECTIONS[:4]],
+        [InlineKeyboardButton(("● " if st["active"] == k else "") + lbl,
+                              callback_data=f"sec:{k}") for k, lbl in SECTIONS[4:]],
     ]
-    if act == "wall":
-        if st["wall_bytes"]:
-            rows.append([
-                InlineKeyboardButton(("● " if st["wall_mode"] == "image" else "○ ")
-                                     + "🖼 Image", callback_data="wp:image"),
-                InlineKeyboardButton(("● " if st["wall_mode"] == "flat" else "○ ")
-                                     + "🎨 Flat color", callback_data="wp:flat"),
-            ])
-        if st["wall_mode"] == "flat":
-            rows.append(swatch_row(st))
-    else:
-        rows.append(swatch_row(st))
 
-    if slider_shown(st):
-        a = active_alpha(st)
+    cs = active_color_state(st)
+    if st["active"] == "wall":
+        rows.append([
+            InlineKeyboardButton(("● " if st["wall_mode"] == "image" and st["wall_bytes"]
+                                  else "○ ") + "🖼 Image", callback_data="wp:image"),
+            InlineKeyboardButton(("● " if st["wall_mode"] == "flat" else "○ ")
+                                 + "🎨 Flat", callback_data="wp:flat"),
+        ])
+        if st["wall_mode"] == "flat" or not st["wall_bytes"]:
+            row = [InlineKeyboardButton(
+                "⚡" + ("●" if cs["idx"] == -1 and not cs["custom"] else ""),
+                callback_data="auto")]
+            for i in range(len(st["palette"])):
+                row.append(InlineKeyboardButton(
+                    "●" if cs["idx"] == i else str(i + 1),
+                    callback_data=f"c:{i}"))
+            rows.append(row)
+    else:
+        row = [InlineKeyboardButton(
+            "⚡" + ("●" if cs["idx"] == -1 and not cs["custom"] else ""),
+            callback_data="auto")]
+        for i in range(len(st["palette"])):
+            row.append(InlineKeyboardButton(
+                "●" if cs["idx"] == i else str(i + 1), callback_data=f"c:{i}"))
+        if cs["custom"]:
+            row.append(InlineKeyboardButton("🎯●", callback_data="noop"))
+        rows.append(row)
+
+        a = st["sections"][st["active"]]["alpha"]
         rows.append([
             InlineKeyboardButton("-10", callback_data="a:-10"),
             InlineKeyboardButton("-5", callback_data="a:-5"),
@@ -172,56 +168,51 @@ def keyboard(st):
 
     rows.append([
         InlineKeyboardButton("✅ Create theme", callback_data="make"),
-        InlineKeyboardButton("🔄 Reset", callback_data="reset"),
+        InlineKeyboardButton(f"🔄 Reset {SEC_LABEL[st['active']]}",
+                             callback_data="reset"),
     ])
     return InlineKeyboardMarkup(rows)
 
 
-def render_safe(st):
-    """Render the preview; returns None on ANY failure (never raises)."""
-    try:
-        return render_preview(st["cats"], st["wall"], st["wall_mode"],
-                              st["wall_bytes"], st["swatches"], st["active"])
-    except Exception as e:
-        logger.error(f"Preview render failed: {e}")
-        return None
+def build_payload(st):
+    res = resolve_theme(st["palette"], st["sections"])
+    alphas = {k: st["sections"][k]["alpha"] for k in ALPHA_SECTIONS}
+    wall = st["wall_bytes"] if (st["wall_mode"] == "image" and st["wall_bytes"]) else None
+    wall_flat = resolve_wall(st["palette"], st["wall_idx"], st["wall_custom"])
+    png = render_preview(res, alphas, wall, wall_flat)
+    return png, caption(st), keyboard(st)
 
 
 async def refresh_editor(chat_id, st, context):
     if not st.get("msg_id"):
         return
-    cap, kb = caption(st), keyboard(st)
-
+    png, cap, kb = build_payload(st)
     if st["mode"] == "photo":
-        png = render_safe(st)
-        if png is not None:
-            ok = False
-            for _ in range(2):
-                png.seek(0)
-                try:
-                    await context.bot.edit_message_media(
-                        chat_id=chat_id, message_id=st["msg_id"],
-                        media=InputMediaPhoto(png, caption=cap, parse_mode="HTML"),
-                        reply_markup=kb)
-                    ok = True
-                    break
-                except RetryAfter as e:
-                    await asyncio.sleep(float(e.retry_after) + 1)
-                except BadRequest:
-                    ok = True   # nothing changed — fine
-                    break
-                except Exception as e:
-                    logger.warning(f"Media edit failed: {e}")
-                    break
-            if ok:
-                return
-        # fallback: old image stays, caption + buttons update
-        try:
-            await context.bot.edit_message_caption(
-                chat_id=chat_id, message_id=st["msg_id"],
-                caption=cap, reply_markup=kb, parse_mode="HTML")
-        except Exception:
-            pass
+        ok = False
+        for _ in range(2):
+            png.seek(0)
+            try:
+                await context.bot.edit_message_media(
+                    chat_id=chat_id, message_id=st["msg_id"],
+                    media=InputMediaPhoto(png, caption=cap, parse_mode="HTML"),
+                    reply_markup=kb)
+                ok = True
+                break
+            except RetryAfter as e:
+                await asyncio.sleep(float(e.retry_after) + 1)
+            except BadRequest:
+                ok = True  # nothing changed
+                break
+            except Exception as e:
+                logger.warning(f"Media edit failed: {e}")
+                break
+        if not ok:
+            try:
+                await context.bot.edit_message_caption(
+                    chat_id=chat_id, message_id=st["msg_id"],
+                    caption=cap, reply_markup=kb, parse_mode="HTML")
+            except Exception:
+                pass
     else:
         try:
             await context.bot.edit_message_text(
@@ -239,19 +230,14 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def send_editor(msg, st, context):
-    cap, kb = caption(st), keyboard(st)
-    png = render_safe(st)
-    if png is not None:
-        try:
-            png.name = "preview.png"
-            sent = await msg.reply_photo(photo=png, caption=cap, reply_markup=kb,
-                                         parse_mode="HTML")
-            st["mode"] = "photo"
-        except Exception as e:
-            logger.error(f"Photo send failed → text mode: {e}")
-            sent = await msg.reply_text(cap, reply_markup=kb, parse_mode="HTML")
-            st["mode"] = "text"
-    else:
+    png, cap, kb = build_payload(st)
+    try:
+        png.name = "preview.png"
+        sent = await msg.reply_photo(photo=png, caption=cap, reply_markup=kb,
+                                     parse_mode="HTML")
+        st["mode"] = "photo"
+    except Exception as e:
+        logger.error(f"Preview failed → text mode: {e}")
         sent = await msg.reply_text(cap, reply_markup=kb, parse_mode="HTML")
         st["mode"] = "text"
     st["msg_id"] = sent.message_id
@@ -273,9 +259,9 @@ async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("😕 Empty file — try another image.")
         return
 
-    swatches = extract_palette(raw)               # suggestions only, never raises
+    palette = extract_palette(raw)          # never raises
     try:
-        wall = prepare_wallpaper(raw)             # used as-is, untouched colors
+        wall = prepare_wallpaper(raw)
     except Exception:
         wall = None
 
@@ -287,7 +273,7 @@ async def on_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
     context.user_data.clear()
-    context.user_data.update(new_state(swatches, wall))
+    context.user_data.update(default_state(palette, wall))
     await send_editor(msg, context.user_data, context)
 
 
@@ -295,17 +281,17 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     st = context.user_data
     m = HEX_RE.match((update.message.text or "").strip())
     if not m:
-        if "cats" in st:
+        if "palette" in st:
             await update.message.reply_text(
                 "💡 Type a color like <code>#34c7a4</code> — it applies to the "
                 "part you're editing.", parse_mode="HTML")
         else:
             await update.message.reply_text("📸 Send me an image to start!")
         return
-    if "cats" not in st:
+    if "palette" not in st:
         await update.message.reply_text("📸 Send me an image first.")
         return
-    set_active_hex(st, "#" + m.group(1).lower())
+    set_custom(st, "#" + m.group(1).lower())
     await refresh_editor(update.effective_chat.id, st, context)
 
 
@@ -314,28 +300,31 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     st = context.user_data
     data = q.data
 
-    if "cats" not in st:
+    if "palette" not in st:
         await q.answer("Old session — send a new image 📸", show_alert=True)
         return
 
     if data == "make":
         await q.answer("⏳ Creating theme...")
-        wall_img = st["wall_bytes"] if (st["wall_mode"] == "image"
-                                        and st["wall_bytes"]) else None
+        res = resolve_theme(st["palette"], st["sections"])
+        alphas = {k: st["sections"][k]["alpha"] for k in ALPHA_SECTIONS}
+        wall = st["wall_bytes"] if (st["wall_mode"] == "image" and st["wall_bytes"]) else None
+        wall_flat = None if wall else resolve_wall(st["palette"], st["wall_idx"],
+                                                   st["wall_custom"])
         try:
-            theme = build_attheme(st["cats"], wall_img,
-                                  st["wall"]["hex"], st["wall"]["alpha"])
+            theme = build_attheme(res, alphas, wall, wall_flat)
         except Exception as e:
             logger.error(f"Build failed: {e}")
             await context.bot.send_message(
                 chat_id=update.effective_chat.id,
                 text="😕 Something broke — press ✅ again or 🔄 Reset.")
             return
-        fname = f"MyTheme_{st['cats']['accent']['hex'][1:]}.attheme"
+        fname = f"Theme_{rgb_to_hex(res['accent'])[1:]}_{alphas['in']}_{alphas['out']}.attheme"
         await context.bot.send_document(
             chat_id=update.effective_chat.id, document=theme, filename=fname,
             caption="🎨 <b>Your theme is ready!</b>\n"
-                    "All text white · links colored · your colors everywhere else\n\n"
+                    f"Accent {rgb_to_hex(res['accent'])} · "
+                    f"In {alphas['in']}% · Out {alphas['out']}%\n\n"
                     "Open the file — Telegram applies it instantly ✨",
             parse_mode="HTML")
         return
@@ -346,24 +335,32 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("sec:"):
         st["active"] = data[4:]
-    elif data.startswith("sw:"):
-        i = int(data[3:])
-        if 0 <= i < len(st["swatches"]):
-            set_active_hex(st, st["swatches"][i])
+    elif data == "auto":
+        if st["active"] == "wall":
+            st["wall_idx"], st["wall_custom"] = -1, None
+        else:
+            s = st["sections"][st["active"]]
+            s["idx"], s["custom"] = -1, None
+    elif data.startswith("c:"):
+        set_color_idx(st, int(data[2:]))
+    elif data.startswith("a:") and st["active"] in ALPHA_SECTIONS:
+        s = st["sections"][st["active"]]
+        s["alpha"] = max(0, min(100, s["alpha"] + int(data[2:])))
+    elif data.startswith("s:") and st["active"] in ALPHA_SECTIONS:
+        st["sections"][st["active"]]["alpha"] = max(0, min(100, int(data[2:])))
     elif data == "wp:image" and st["wall_bytes"]:
         st["wall_mode"] = "image"
     elif data == "wp:flat":
         st["wall_mode"] = "flat"
-    elif data.startswith("a:") and slider_shown(st):
-        set_active_alpha(st, active_alpha(st) + int(data[2:]))
-    elif data.startswith("s:") and slider_shown(st):
-        set_active_alpha(st, int(data[2:]))
     elif data == "reset":
-        sw, wb, mid, mode = (st["swatches"], st["wall_bytes"],
-                             st["msg_id"], st["mode"])
-        st.clear()
-        st.update(new_state(sw, wb))
-        st["msg_id"], st["mode"] = mid, mode
+        # ⬅ ONLY the active part is reset
+        if st["active"] == "wall":
+            st["wall_mode"] = "image" if st["wall_bytes"] else "flat"
+            st["wall_idx"], st["wall_custom"] = -1, None
+        else:
+            s = st["sections"][st["active"]]
+            s["idx"], s["custom"], s["alpha"] = -1, None, 0
+        await q.answer(f"🔄 {SEC_FULL[st['active']]} reset")
 
     await q.answer()
     await refresh_editor(update.effective_chat.id, st, context)
