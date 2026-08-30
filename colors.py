@@ -7,6 +7,10 @@ FALLBACK_PALETTE = ["#23272e", "#333a45", "#4a90d9", "#7e57c2", "#26a69a", "#ef6
 
 AV = ["Blue", "Cyan", "Green", "Orange", "Pink", "Red", "Violet"]
 
+# Links keep Telegram's classic blue in every theme — never themed.
+# Change this one constant if you prefer another shade (e.g. #2678b6).
+LINK_BLUE = (0x27, 0x82, 0xE9)
+
 
 # ---------- Basic helpers ----------
 
@@ -31,13 +35,13 @@ def luminance(rgb) -> float:
 
 
 def saturation(rgb) -> float:
-    _, l, s = colorsys.rgb_to_hls(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255)
+    _, _, s = colorsys.rgb_to_hls(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255)
     return s
 
 
 def readable_on(bg_rgb):
     """Near-white or near-black depending on the background."""
-    return (244, 245, 247) if luminance(bg_rgb) < 0.5 else (26, 28, 32)
+    return (255, 255, 255) if luminance(bg_rgb) < 0.5 else (22, 24, 29)
 
 
 def mix(c1, c2, k):
@@ -49,6 +53,30 @@ def ensure_contrast(rgb, bg_rgb, min_diff=0.25):
     if abs(luminance(rgb) - luminance(bg_rgb)) < min_diff:
         return mix(rgb, readable_on(bg_rgb), 0.55)
     return rgb
+
+
+def _hls(rgb):
+    return colorsys.rgb_to_hls(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255)
+
+
+def _to_rgb(h, l, s):
+    r, g, b = colorsys.hls_to_rgb(h, l, s)
+    return (int(round(r * 255)), int(round(g * 255)), int(round(b * 255)))
+
+
+def set_lightness(rgb, l):
+    """Keep hue & saturation, force lightness — guarantees dark/light colors."""
+    h, _, s = _hls(rgb)
+    return _to_rgb(h, l, s)
+
+
+def clamp_lightness(rgb, min_l=None, max_l=None):
+    h, l, s = _hls(rgb)
+    if min_l is not None and l < min_l:
+        l = min_l
+    if max_l is not None and l > max_l:
+        l = max_l
+    return _to_rgb(h, l, s)
 
 
 # ---------- Color extraction (never raises) ----------
@@ -99,10 +127,16 @@ def prepare_wallpaper(data: bytes, max_side: int = 1080, quality: int = 75) -> b
     return buf.getvalue()
 
 
-# ---------- Section resolution (auto defaults from image colors) ----------
+# ---------- Section resolution (mode-driven auto, no M3) ----------
 
-def resolve_theme(palette: list, sections: dict) -> dict:
-    """Every color comes from the user's image or explicit choice — no M3."""
+def resolve_theme(palette: list, sections: dict, mode: str = "dark") -> dict:
+    """
+    Auto values are driven by dark/light MODE:
+      dark  → truly dark bg, WHITE text, vivid accent
+      light → truly light bg, near-black text, deep accent
+    Manual picks (idx / custom hex) always win.
+    """
+    dark = mode == "dark"
     pal = [hex_to_rgb(h) for h in (palette or FALLBACK_PALETTE)]
 
     def chosen(sec):
@@ -115,26 +149,38 @@ def resolve_theme(palette: list, sections: dict) -> dict:
         return None
 
     darkest = min(pal, key=luminance)
+    lightest = max(pal, key=luminance)
     most_sat = max(pal, key=saturation)
 
+    # --- auto colors, forced to proper dark/light (fixes "too light") ---
+    auto_bg = set_lightness(darkest, 0.07) if dark else set_lightness(lightest, 0.96)
+    auto_text = (255, 255, 255) if dark else (22, 24, 29)
+    auto_accent = clamp_lightness(most_sat, min_l=0.62) if dark \
+        else clamp_lightness(most_sat, max_l=0.42)
+    auto_bar = auto_bg
+    auto_in = mix(auto_bg, auto_text, 0.10)
+    auto_out = auto_accent
+
     res = {}
-    res["bg"] = chosen("bg") or darkest
-    res["text"] = chosen("text") or readable_on(res["bg"])
-    res["accent"] = chosen("accent") or ensure_contrast(most_sat, res["bg"])
-    res["bar"] = chosen("bar") or res["bg"]
-    res["in"] = chosen("in") or mix(res["bg"], res["text"], 0.10)
-    res["out"] = chosen("out") or res["accent"]
+    res["bg"] = chosen("bg") or auto_bg
+    res["text"] = chosen("text") or auto_text
+    res["accent"] = chosen("accent") or auto_accent
+    res["bar"] = chosen("bar") or auto_bar
+    res["in"] = chosen("in") or auto_in
+    res["out"] = chosen("out") or auto_out
     return res
 
 
-def resolve_wall(palette: list, wall_idx, wall_custom):
+def resolve_wall(palette: list, wall_idx, wall_custom, mode: str = "dark"):
     """Flat wallpaper color (used when the image is not selected)."""
     if wall_custom:
         return hex_to_rgb(wall_custom)
     pal = [hex_to_rgb(h) for h in (palette or FALLBACK_PALETTE)]
     if isinstance(wall_idx, int) and 0 <= wall_idx < len(pal):
         return pal[wall_idx]
-    return min(pal, key=luminance)
+    if mode == "dark":
+        return set_lightness(min(pal, key=luminance), 0.06)
+    return set_lightness(max(pal, key=luminance), 0.97)
 
 
 # ---------- .attheme generator ----------
@@ -142,10 +188,8 @@ def resolve_wall(palette: list, wall_idx, wall_custom):
 def build_attheme(colors: dict, alphas: dict,
                   wallpaper: bytes | None = None, wall_flat=None) -> bytes:
     """
-    colors: dict with bg, bar, in, out, text, accent (RGB tuples)
-    alphas: dict with per-section transparency 0..100
-    wallpaper: JPEG bytes (embedded after "WPS") or None
-    wall_flat: RGB tuple for flat wallpaper (when no image)
+    colors: bg, bar, in, out, text, accent (RGB tuples)
+    alphas: per-section transparency 0..100
     """
     bg, bar = colors["bg"], colors["bar"]
     inb, outb = colors["in"], colors["out"]
@@ -192,6 +236,10 @@ def build_attheme(colors: dict, alphas: dict,
             keys = [keys]
         for k in keys:
             M[k] = (rgb, alpha)
+
+    # ===== Links — fixed Telegram blue, never themed =====
+    put(["windowBackgroundWhiteLinkText", "dialogTextLink", "chat_messageLinkIn",
+         "chat_messageLinkOut", "chat_serviceLink"], LINK_BLUE)
 
     # ===== Background / surfaces =====
     put("windowBackgroundWhite", bg, a_bg)
@@ -252,7 +300,7 @@ def build_attheme(colors: dict, alphas: dict,
     put("chat_inBubbleShadow", shadow)
     put("chat_messageTextIn", in_text, a_text)
     put(["chat_inTimeText", "chat_inTimeSelectedText"], in_time)
-    put(["chat_inReplyLine", "chat_inReplyNameText", "chat_messageLinkIn"], acc_in)
+    put(["chat_inReplyLine", "chat_inReplyNameText"], acc_in)
     put(["chat_inReplyMessageText", "chat_inReplyMediaMessageText",
          "chat_inReplyMediaMessageSelectedText"], mix(in_text, inb, 0.30))
     put(["chat_inAudioDurationText", "chat_inAudioDurationSelectedText",
@@ -290,8 +338,7 @@ def build_attheme(colors: dict, alphas: dict,
     put("chat_outBubbleShadow", shadow)
     put("chat_messageTextOut", out_text, a_text)
     put(["chat_outTimeText", "chat_outTimeSelectedText"], out_time)
-    put(["chat_outReplyLine", "chat_outReplyNameText", "chat_messageLinkOut"],
-        acc_out)
+    put(["chat_outReplyLine", "chat_outReplyNameText"], acc_out)
     put(["chat_outReplyMessageText", "chat_outReplyMediaMessageText",
          "chat_outReplyMediaMessageSelectedText"], mix(out_text, outb, 0.30))
     put(["chat_outAudioDurationText", "chat_outAudioDurationSelectedText",
@@ -366,7 +413,6 @@ def build_attheme(colors: dict, alphas: dict,
          "chat_emojiPanelShadowLine", "windowBackgroundWhiteInputField"],
         divider)
     put("windowBackgroundWhiteInputFieldActivated", accent)
-    put("windowBackgroundWhiteLinkText", acc_text)
 
     # ===== Accent =====
     put(["windowBackgroundWhiteBlueText", "windowBackgroundWhiteBlueText2",
@@ -374,15 +420,15 @@ def build_attheme(colors: dict, alphas: dict,
          "windowBackgroundWhiteBlueText6", "windowBackgroundWhiteBlueText7",
          "windowBackgroundWhiteBlueHeader", "windowBackgroundWhiteValueText",
          "dialogTextBlue", "dialogTextBlue2", "dialogTextBlue3",
-         "dialogTextBlue4", "dialogTextLink", "chat_status", "chat_addContact",
+         "dialogTextBlue4", "chat_status", "chat_addContact",
          "chat_adminText", "chat_adminSelectedText", "chat_botButtonText",
          "chat_botSwitchToInlineText", "dialogInputFieldActivated",
          "groupcreate_cursor", "groupcreate_onlineText",
-         "chat_messagePanelSend", "chat_serviceLink",
-         "chat_unreadMessagesStartText", "chat_editDoneIcon",
-         "chat_stickerReplyNameText", "chats_sentCheck", "chats_sentClock",
-         "chats_sentReadCheck", "sharedMedia_startStopLoadIcon",
-         "PreviewBack", "PreviewBackLinear"], acc_text, a_acc)
+         "chat_messagePanelSend", "chat_unreadMessagesStartText",
+         "chat_editDoneIcon", "chat_stickerReplyNameText", "chats_sentCheck",
+         "chats_sentClock", "chats_sentReadCheck",
+         "sharedMedia_startStopLoadIcon", "PreviewBack",
+         "PreviewBackLinear"], acc_text, a_acc)
     put(["chats_unreadCounter", "chats_verifiedBackground",
          "chats_archivePinBackground", "chats_actionBackground",
          "chat_attachGalleryBackground", "chat_attachVideoBackground",
@@ -433,15 +479,15 @@ def build_attheme(colors: dict, alphas: dict,
     put(["dialogLineProgressBackground", "dialogSearchBackground"],
         mix(bg, text, 0.15), 60)
     put("dialogScrollGlow", gray2)
-    put("dialogLinkSelection", accent, 60)
-    put("windowBackgroundWhiteLinkSelection", accent, 60)
+    put("dialogLinkSelection", LINK_BLUE, 60)
+    put("windowBackgroundWhiteLinkSelection", LINK_BLUE, 60)
     put("listSelectorSDK21", sel_ov, 60)
     put("stickers_menuSelector", sel_ov, 60)
     put("chat_emojiPanelIconSelector", sel_ov, 60)
     put("chat_emojiPanelStickerPackSelector", sel_ov, 60)
     put("chat_selectedBackground", accent, 90)
     put("chat_textSelectBackground", accent, 100)
-    put("chat_linkSelectBackground", accent, 50)
+    put("chat_linkSelectBackground", LINK_BLUE, 50)
     put("chats_tabletSelectedOverlay", sel_ov, 100)
 
     # ===== Service chip =====
@@ -483,9 +529,8 @@ def build_attheme(colors: dict, alphas: dict,
     put("chats_unreadCounterMutedText", text)
 
     # ===== Wallpaper =====
-    # Format from a real exported theme:
-    #   image → all color lines, then "WPS", then raw image bytes
-    #   flat  → chat_wallpaper=<signed_argb color>
+    # image → all color lines, then "WPS", then raw image bytes
+    # flat  → chat_wallpaper=<signed_argb color>
     lines = [f"{k}={signed_argb(rgb[0], rgb[1], rgb[2], a)}"
              for k, (rgb, a) in M.items()]
     text_part = ("\n".join(lines) + "\n").encode("utf-8")
