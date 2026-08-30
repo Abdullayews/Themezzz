@@ -3,6 +3,8 @@ import io
 
 from PIL import Image
 
+FALLBACK_PALETTE = ["#5b6bbf", "#8e5bbf", "#3f7fd6", "#b05b9e", "#4c8f6a"]
+
 
 # ---------- Helpers ----------
 
@@ -20,19 +22,17 @@ def signed_argb(r: int, g: int, b: int, a: int = 255) -> int:
 # ---------- Material 3 palette ----------
 
 class M3Palette:
-    """Tonal palette built from a seed color (chroma factor controls saturation)."""
+    """Tonal palette built from a seed color."""
 
-    def __init__(self, seed_hex: str, chroma: float = 1.0):
+    def __init__(self, seed_hex: str):
         r, g, b = hex_to_rgb(seed_hex)
         h, l, s = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
         self.h = h
         self.s = min(1.0, max(0.22, s * 1.15))
-        self.k = chroma
 
     def _tone(self, hue: float, sat: float, tone: int):
         tone = max(0, min(100, tone))
-        s = min(1.0, sat * self.k)
-        # Reduce chroma near extreme tones (mimics M3 behavior)
+        s = min(1.0, sat)
         if tone <= 12:
             s *= 0.55 + (tone / 12) * 0.45
         if tone >= 88:
@@ -47,41 +47,46 @@ class M3Palette:
     def neutral_variant(self, t): return self._tone(self.h, self.s * 0.18, t)
 
 
-# ---------- Color extraction from an image ----------
+# ---------- Color extraction (never raises) ----------
 
 def extract_palette(data: bytes, count: int = 5) -> list:
-    img = Image.open(io.BytesIO(data)).convert("RGB")
-    img.thumbnail((160, 160))
-    q = img.quantize(colors=9)
-    counts = q.convert("RGB").getcolors(160 * 160) or []
+    try:
+        img = Image.open(io.BytesIO(data)).convert("RGB")
+        img.thumbnail((160, 160))
+        q = img.quantize(colors=9)
+        counts = q.convert("RGB").getcolors(160 * 160) or []
 
-    cands = []
-    for cnt, (r, g, b) in counts:
-        h, l, s = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
-        cands.append((cnt, h, l, s, (r, g, b)))
+        cands = []
+        for cnt, (r, g, b) in counts:
+            h, l, s = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
+            cands.append((cnt, h, l, s, (r, g, b)))
 
-    def pick(avoid_extremes=True):
-        out = []
-        for cnt, h, l, s, rgb in sorted(cands, key=lambda x: -x[0]):
-            if avoid_extremes and (l < 0.10 or l > 0.90):
-                continue  # skip near-black / near-white
-            if any(abs(h - h2) < 0.07 and abs(l - l2) < 0.18 for _, h2, l2, _, _ in out):
-                continue  # skip similar colors
-            out.append((cnt, h, l, s, rgb))
-            if len(out) >= count:
-                break
-        return out
+        def pick(strict):
+            out = []
+            for cnt, h, l, s, rgb in sorted(cands, key=lambda x: -x[0]):
+                if strict and (l < 0.10 or l > 0.90):
+                    continue  # skip near-black / near-white
+                if any(abs(h - h2) < 0.07 and abs(l - l2) < 0.18
+                       for _, h2, l2, _, _ in out):
+                    continue  # skip similar colors
+                out.append((cnt, h, l, s, rgb))
+                if len(out) >= count:
+                    break
+            return out
 
-    res = pick() or pick(avoid_extremes=False)
-    # Sort by frequency + saturation → first color is the best seed
-    res.sort(key=lambda x: -(x[0] * (0.3 + x[3])))
-    return ["#%02x%02x%02x" % rgb for *_, rgb in res]
+        res = pick(True) or pick(False)
+        if res:
+            res.sort(key=lambda x: -(x[0] * (0.3 + x[3])))
+            return ["#%02x%02x%02x" % rgb for *_, rgb in res]
+    except Exception:
+        pass
+    return list(FALLBACK_PALETTE)
 
 
-# ---------- Wallpaper preparation ----------
+# ---------- Wallpaper ----------
 
-def prepare_wallpaper(data: bytes, max_side: int = 1440, quality: int = 82) -> bytes:
-    """Downscale the image to be embedded into the .attheme (keeps file size sane)."""
+def prepare_wallpaper(data: bytes, max_side: int = 1080, quality: int = 75) -> bytes:
+    """Downscale the image to be embedded into the .attheme."""
     img = Image.open(io.BytesIO(data)).convert("RGB")
     img.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
     buf = io.BytesIO()
@@ -96,28 +101,23 @@ OUT_TONES = {"primary": (34, 40), "secondary": (36, 42), "tertiary": (34, 40)}
 
 
 def build_attheme(seed_hex: str, style: str, alpha_pct: int,
-                  role: str = "primary", chroma: float = 1.0,
-                  contrast: int = 0, wallpaper: bytes | None = None) -> bytes:
-    p = M3Palette(seed_hex, chroma)
+                  role: str = "primary", wallpaper: bytes | None = None) -> bytes:
+    p = M3Palette(seed_hex)
     dark = style == "dark"
 
-    # Contrast: shift surface tones (dark → deeper, light → brighter)
-    sh = (-4 * contrast) if dark else (4 * contrast)
-    N = lambda t: p.neutral(t + (sh if t <= 60 else 0))
-    NV = lambda t: p.neutral_variant(t + (sh if t <= 60 else 0))
+    N = lambda t: p.neutral(t)
+    NV = lambda t: p.neutral_variant(t)
     P = lambda t: p.primary(t)
     out_fn = getattr(p, role)
     out_t = OUT_TONES[role][0 if dark else 1]
 
     if dark:
-        out_text = N(98)
-        out_time = N(85)
+        out_text, out_time = N(98), N(85)
         out_reply, out_line = out_fn(80), out_fn(80)
         link_in, link_out = P(70), P(80)
         sent, read = out_fn(65), out_fn(75)
     else:
-        out_text = N(100)
-        out_time = N(60)
+        out_text, out_time = N(100), N(60)
         out_reply, out_line = out_fn(20), out_fn(85)
         link_in, link_out = P(40), P(30)
         sent, read = out_fn(55), out_fn(45)
@@ -181,14 +181,14 @@ def build_attheme(seed_hex: str, style: str, alpha_pct: int,
     lines = []
     for key, (r, g, b) in mapping.items():
         if key in ALPHA_KEYS:
-            a = alpha                      # 🫧 transparency slider applies here
+            a = alpha                     # 🫧 transparency slider
         elif key == "chat_serviceBackground":
-            a = 102                        # "Today" chip stays fixed at 40%
+            a = 102                       # "Today" chip: fixed 40%
         else:
             a = 255
         lines.append(f"{key}={signed_argb(r, g, b, a)}")
 
-    # Background: flat color OR the user's image (hex-embedded into .attheme)
+    # Background: flat color OR the user's image (hex-embedded)
     if wallpaper:
         lines.append("chat_wallpaper=-1")
         hx = wallpaper.hex()
