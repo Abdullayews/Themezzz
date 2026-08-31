@@ -26,7 +26,7 @@ HEX_RE = re.compile(r"^#?\s*([0-9a-fA-F]{6})$")
 
 SECTIONS = [
     ("bg", "🖼 BG"), ("bar", "📊 Bar"), ("in", "📥 In"), ("out", "📤 Out"),
-    ("text", "✏️ Text"), ("accent", "🔵 Accent"), ("reply", "🏷 Reply"),
+    ("text", "🐻‍❄️ Text"), ("accent", "🔵 Accent"), ("reply", "🏷 Reply"),
     ("wall", "🌇 Wall"),
 ]
 SEC_LABEL = dict(SECTIONS)
@@ -47,10 +47,11 @@ WELCOME = (
     "<b>How it works</b>\n"
     "1️⃣ Send me any image — I grab its colors\n"
     "2️⃣ Pick 🌙 Dark or ☀️ Light mode\n"
-    "3️⃣ Pick a part: BG, Bar, In/Out bubbles, Text, Accent, Reply, Wallpaper\n"
+    "3️⃣ Pick a part: BG, Bar, In/Out bubbles, 🐻‍❄️ Text, Accent, Reply, Wallpaper\n"
     "4️⃣ Choose a color (⚡ auto, №1-6 suggested, or type #hex)\n"
     "    and set transparency with the slider\n"
     "5️⃣ ✅ Create theme — done!\n\n"
+    "🐻‍❄️ Text is white by default in Dark mode\n"
     "🔍 Wallpaper can be blurred or original — toggle it in the Wall section\n"
     "🏷 Reply = username + quoted text in replies (white by default)\n"
     "🔄 Reset clears only the part you're editing.\n"
