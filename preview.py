@@ -109,6 +109,7 @@ def render_preview(colors, alphas, wall_bytes, wall_flat):
       status bar → action bar → date chip → bubbles (with reply block)
       → gray hint → scroll-down FAB → input bar with pill + send button.
     Two-pass alpha compositing = how Telegram layers per-key transparency.
+    Monochrome styling: elevation is darker, never lighter (Forest-style).
     """
     bg, bar = colors["bg"], colors["bar"]
     inb, outb = colors["in"], colors["out"]
@@ -125,9 +126,8 @@ def render_preview(colors, alphas, wall_bytes, wall_flat):
     SB, BAR, INP = 28 * S, 56 * S, 62 * S    # status / action / input heights
     top, bot = SB + BAR, H - INP
 
-    # ---- derived tones ----
+    # ---- derived tones (darker, never lighter) ----
     bar_text = readable_on(bar)
-    bar_sub = mix(bar_text, bar, 0.40)
     bar_icon = mix(bar_text, bar, 0.15)
     sb_col = mix(bar, (0, 0, 0), 0.22 if dark else 0.06)
     in_text = ensure_contrast(text, inb)
@@ -141,7 +141,7 @@ def render_preview(colors, alphas, wall_bytes, wall_flat):
     acc_in = ensure_contrast(accent, inb)
     gray2 = mix(text, bg, 0.45)
     gray3 = mix(text, bg, 0.55)
-    divider = mix(bg, text, 0.12)
+    divider = mix(bg, (0, 0, 0), 0.40) if dark else mix(bg, (0, 0, 0), 0.14)
     fab = mix(accent, (0, 0, 0), 0.32 if dark else 0.18)   # darker circle buttons
     on_fab = readable_on(fab)
 
@@ -164,7 +164,7 @@ def render_preview(colors, alphas, wall_bytes, wall_flat):
                          (0, 0, 0, 100) if dark else (255, 255, 255, 110))
         chat = Image.alpha_composite(chat.convert("RGBA"), tint).convert("RGB")
     else:
-        wf = wall_flat if wall_flat else mix(bg, text, 0.02)
+        wf = wall_flat if wall_flat else mix(bg, (0, 0, 0), 0.25 if dark else 0.05)
         chat = Image.new("RGB", (W, bot - top), wf)
     img = Image.new("RGB", (W, H), bg)
     img.paste(chat, (0, top))
@@ -178,13 +178,15 @@ def render_preview(colors, alphas, wall_bytes, wall_flat):
     d.rectangle([0, 0, W, SB], fill=sb_col + (a_bar,))
     d.rectangle([0, SB, W, top], fill=bar + (a_bar,))
 
-    # "Today" date chip
+    # "Today" date chip — darker than bg, semi-transparent
     chip_txt = "Today"
     cw = int(d.textlength(chip_txt, font=f_chip) + 34 * S)
     ch = 28 * S
     ccy = top + 20 * S
     d.rounded_rectangle([(W - cw) // 2, ccy, (W + cw) // 2, ccy + ch],
-                        radius=ch // 2, fill=mix(bg, text, 0.45) + (165,))
+                        radius=ch // 2,
+                        fill=(mix(bg, (0, 0, 0), 0.25) if dark
+                              else mix(bg, (0, 0, 0), 0.05)) + (200,))
 
     # ---- incoming bubble (with reply block inside) ----
     p, R = 11 * S, 17 * S
@@ -223,11 +225,13 @@ def render_preview(colors, alphas, wall_bytes, wall_flat):
     d.ellipse([fcx - fr, fcy - fr, fcx + fr, fcy + fr], fill=fab + (235,))
 
     # ---- input bar + pill + send button ----
-    d.rectangle([0, bot, W, H], fill=mix(bg, text, 0.05) + (255,))
+    d.rectangle([0, bot, W, H], fill=bg + (255,))
     d.line([(0, bot), (W, bot)], fill=divider + (255,), width=S)
     py0, py1 = bot + 9 * S, bot + 53 * S
     d.rounded_rectangle([12 * S, py0, W - 78 * S, py1],
-                        radius=(py1 - py0) // 2, fill=mix(bg, text, 0.10) + (255,))
+                        radius=(py1 - py0) // 2,
+                        fill=(mix(bg, (0, 0, 0), 0.28) if dark
+                              else mix(bg, (0, 0, 0), 0.08)) + (255,))
     scx, scy, sr = W - 40 * S, bot + 31 * S, 21 * S
     d.ellipse([scx - sr, scy - sr, scx + sr, scy + sr], fill=accent + (a_acc,))
 
@@ -261,7 +265,7 @@ def render_preview(colors, alphas, wall_bytes, wall_flat):
     d.text(((W - ctw) // 2, ccy + (ch - f_chip.size) // 2), chip_txt,
            font=f_chip, fill=text + (235,))
 
-    # ---- incoming bubble content ----
+    # ---- incoming bubble content (reply block + message) ----
     rl_x = bx1 + p
     d.rectangle([rl_x, by1 + p, rl_x + 3 * S, by1 + p + rh], fill=acc_in)
     d.text((rl_x + 9 * S, by1 + p - 1 * S), r_un, font=f_reply_b,
