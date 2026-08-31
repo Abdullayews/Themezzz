@@ -5,13 +5,13 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter
 from colors import readable_on, mix, ensure_contrast, luminance
 
 
-# ---------- Vector Drawing Helpers (all S-scaled) ----------
+# ---------- Vector Drawing Helpers (all sizes S-scaled) ----------
 
 def _draw_status_bar(d, pw, text_color, body_color, S):
     """Phone status bar: time, punch-hole camera, signal, wifi, battery."""
     col = mix(text_color, body_color, 0.35) + (220,)
     w = max(1, int(1.5 * S))
-    # Camera punch hole
+    # Camera punch hole (hardware black — achromatic)
     d.ellipse([pw // 2 - 5 * S, 11 * S, pw // 2 + 5 * S, 21 * S],
               fill=(0, 0, 0, 200))
     # Time
@@ -69,7 +69,7 @@ def _draw_checkmarks(d, x, y, s, color):
 
 
 def _draw_clip_icon(d, x, y, s, color):
-    """📎 paperclip — FIXED: every arc gets a 4-coordinate bounding box."""
+    """📎 paperclip — every arc gets a 4-coordinate bounding box."""
     w = max(2, int(s * 0.18))
     r = s * 0.4
     # top hook (upper half circle)
@@ -77,7 +77,7 @@ def _draw_clip_icon(d, x, y, s, color):
     # two vertical strokes
     d.line([(x, y + r), (x, y + s)], fill=color, width=w)
     d.line([(x + 2 * r, y + r), (x + 2 * r, y + s * 0.85)], fill=color, width=w)
-    # bottom curve (lower half circle) — was the crash: 2 coords instead of 4
+    # bottom curve (lower half circle)
     d.arc([x, y + s * 0.5, x + 2 * r, y + s * 1.3], 0, 180, fill=color, width=w)
 
 
@@ -112,11 +112,18 @@ def _round_corners(img, radius):
 # ---------- Main Renderer ----------
 
 def render_preview(colors, alphas, wall_bytes, wall_flat):
-    """Dual-phone Telegram UI renderer: chat screen + chat list."""
+    """
+    Dual-phone Telegram UI renderer: chat screen + chat list.
+    Every color comes from the theme dict (derived from the user's picture):
+    bg, bar, in, out, text, accent, reply + semantic error/success/etc.
+    Achromatic extremes (black/white) are used only as luminance anchors.
+    """
     bg, bar = colors["bg"], colors["bar"]
     inb, outb = colors["in"], colors["out"]
     text, accent = colors["text"], colors["accent"]
     reply = colors["reply"]
+    # image-derived semantic color (no hardcoded red anywhere)
+    err = colors.get("error") or ensure_contrast(accent, bg)
 
     get_alpha = lambda k: max(0, min(255, round(255 * (1 - alphas.get(k, 0) / 100.0))))
     a_bar = get_alpha("bar")
@@ -130,7 +137,7 @@ def render_preview(colors, alphas, wall_bytes, wall_flat):
     S = 2                                       # supersampling
     W, H = 1000 * S, 1000 * S
 
-    # Backdrop
+    # Backdrop — accent mixed toward black/white (achromatic anchors only)
     outer_bg = mix(accent, (0, 0, 0) if dark else (255, 255, 255),
                    0.6 if dark else 0.35)
     canvas = Image.new("RGBA", (W, H), outer_bg + (255,))
@@ -184,11 +191,12 @@ def render_preview(colors, alphas, wall_bytes, wall_flat):
     _draw_search_icon(p1_d, pw - 68 * S, 51 * S, 12 * S, bar_col)
     _draw_more_dots(p1_d, pw - 30 * S, 50 * S, 4 * S, 7 * S, bar_col)
 
-    # Date pill
+    # Date pill — darker surface + derived text color (no static white)
+    pill_bg = mix(bg, (0, 0, 0), 0.40 if dark else 0.12)
     p1_d.rounded_rectangle([pw // 2 - 40 * S, 98 * S, pw // 2 + 40 * S, 116 * S],
-                           radius=9 * S, fill=mix(bg, (0, 0, 0), 0.4) + (160,))
+                           radius=9 * S, fill=pill_bg + (160,))
     p1_d.rounded_rectangle([pw // 2 - 25 * S, 104 * S, pw // 2 + 25 * S, 110 * S],
-                           radius=3 * S, fill=(255, 255, 255, 200))
+                           radius=3 * S, fill=readable_on(pill_bg) + (200,))
 
     # 1. Incoming message with reply block
     p1_d.rounded_rectangle([16 * S, 130 * S, 250 * S, 185 * S], radius=14 * S,
@@ -234,9 +242,9 @@ def render_preview(colors, alphas, wall_bytes, wall_flat):
     _draw_checkmarks(p1_d, 366 * S, 316 * S, 10 * S,
                      ensure_contrast(text, outb) + (a_text,))
 
-    # 4. Incoming message with avatar
+    # 4. Incoming message with avatar (avatar color = accent × derived error)
     p1_d.ellipse([14 * S, 355 * S, 46 * S, 387 * S],
-                 fill=mix(accent, (255, 0, 0), 0.3) + (230,))
+                 fill=mix(accent, err, 0.3) + (230,))
     p1_d.rounded_rectangle([54 * S, 350 * S, 280 * S, 405 * S], radius=14 * S,
                            fill=inb + (a_in,))
     p1_d.rounded_rectangle([66 * S, 360 * S, 140 * S, 368 * S], radius=3 * S,
@@ -254,10 +262,11 @@ def render_preview(colors, alphas, wall_bytes, wall_flat):
     _draw_checkmarks(p1_d, 366 * S, 440 * S, 10 * S,
                      ensure_contrast(text, outb) + (a_text,))
 
-    # Bottom input bar
+    # Bottom input bar (Forest rule: elevation is darker, never lighter)
     p1_d.rectangle([0, ph - 60 * S, pw, ph], fill=bg + (255,))
     p1_d.rounded_rectangle([12 * S, ph - 52 * S, pw - 62 * S, ph - 10 * S],
-                           radius=21 * S, fill=mix(bg, text, 0.12) + (255,))
+                           radius=21 * S,
+                           fill=mix(bg, (0, 0, 0), 0.25 if dark else 0.07) + (255,))
     p1_d.ellipse([24 * S, ph - 42 * S, 44 * S, ph - 22 * S],
                  outline=mix(text, bg, 0.4) + (a_text,), width=max(2, S))
     p1_d.rounded_rectangle([56 * S, ph - 36 * S, 180 * S, ph - 26 * S],
