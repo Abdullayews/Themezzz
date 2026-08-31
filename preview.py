@@ -86,7 +86,8 @@ def render_preview(colors, alphas, wall_bytes, wall_flat):
         bh = int(f_bub.size + pad_y * 2)
         x = int((W * S - bw - 14 * S) if out else 14 * S)
         corners = (1, 1, 0, 1) if out else (1, 1, 1, 0)
-        od.rounded_rectangle([x, y, x + bw, y + bh], radius=16 * S,
+        radius = min(16 * S, bh // 2 - 1, bw // 2 - 1)
+        od.rounded_rectangle([x, y, x + bw, y + bh], radius=radius,
                              fill=fill + (alpha,), corners=corners)
         od.text((x + pad_x, y + pad_y), txt, font=f_bub, fill=tcol + (ta,))
         return x, y, bw, bh, tw
