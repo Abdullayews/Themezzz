@@ -286,6 +286,8 @@ def resolve_theme(palette: list, sections: dict, mode: str = "dark") -> dict:
 
     res = {}
     res["bg"] = chosen("bg") or auto_bg
+    # 🐻‍❄️ Text: ALWAYS pure white in Dark mode (Light keeps near-black
+    # for readability — white on light bg is invisible)
     res["text"] = chosen("text") or ((255, 255, 255) if dark else (20, 20, 20))
     res["accent"] = chosen("accent") or auto_accent
     res["bar"] = chosen("bar") or res["bg"]
@@ -342,14 +344,14 @@ def build_attheme(colors: dict, alphas: dict,
     divider = mix(bg, BLACK, 0.45) if dark else mix(bg, BLACK, 0.14)
 
     bar_text = ensure_contrast(text, bar)
-    # FIX: weights were inverted — secondary tones must be TEXT-heavy, not bg-heavy
-    bar_sub = mix(bar_text, bar, 0.60)
-    bar_icon = mix(bar_text, bar, 0.80)
+    # 🐻‍❄️ whiter secondary tones (text-heavy, white-leaning)
+    bar_sub = mix(bar_text, bar, 0.65)
+    bar_icon = mix(bar_text, bar, 0.82)
 
     in_text = ensure_contrast(text, inb)
     out_text = ensure_contrast(text, outb)
-    in_time = mix(in_text, inb, 0.60)
-    out_time = mix(out_text, outb, 0.62)
+    in_time = mix(in_text, inb, 0.72)       # whiter timestamps
+    out_time = mix(out_text, outb, 0.75)
 
     acc_text = ensure_contrast(accent, bg)
     on_acc = readable_on(accent)
@@ -358,11 +360,11 @@ def build_attheme(colors: dict, alphas: dict,
     reply_in = ensure_contrast(reply, inb)
     reply_out = ensure_contrast(reply, outb)
 
-    # FIX: was mix(text, bg, 0.25/0.40/0.55) → mostly-bg = INVISIBLE texts.
-    # Now text-heavy ramp: strong secondary / description / hint.
-    gray1 = mix(text, bg, 0.70)
-    gray2 = mix(text, bg, 0.55)
-    gray3 = mix(text, bg, 0.42)
+    # 🐻‍❄️ WHITE text ramp — every text key stays in the white family.
+    # 0.80 / 0.68 / 0.55 = clearly white-leaning grays on dark bg.
+    gray1 = mix(text, bg, 0.80)             # strong secondary — near-white
+    gray2 = mix(text, bg, 0.68)             # descriptions, timestamps
+    gray3 = mix(text, bg, 0.55)             # hints, disabled
 
     thumb = readable_on(bg)
     in_sel = mix(inb, BLACK, 0.12)
