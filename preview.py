@@ -72,12 +72,9 @@ def _draw_clip_icon(d, x, y, s, color):
     """📎 paperclip — every arc gets a 4-coordinate bounding box."""
     w = max(2, int(s * 0.18))
     r = s * 0.4
-    # top hook (upper half circle)
     d.arc([x, y, x + 2 * r, y + 2 * r], 180, 360, fill=color, width=w)
-    # two vertical strokes
     d.line([(x, y + r), (x, y + s)], fill=color, width=w)
     d.line([(x + 2 * r, y + r), (x + 2 * r, y + s * 0.85)], fill=color, width=w)
-    # bottom curve (lower half circle)
     d.arc([x, y + s * 0.5, x + 2 * r, y + s * 1.3], 0, 180, fill=color, width=w)
 
 
@@ -111,18 +108,17 @@ def _round_corners(img, radius):
 
 # ---------- Main Renderer ----------
 
-def render_preview(colors, alphas, wall_bytes, wall_flat):
+def render_preview(colors, alphas, wall_bytes, wall_flat, blur=False):
     """
     Dual-phone Telegram UI renderer: chat screen + chat list.
-    Every color comes from the theme dict (derived from the user's picture):
-    bg, bar, in, out, text, accent, reply + semantic error/success/etc.
+    Wallpaper = ORIGINAL image (no tint); blurred only if user chose so.
+    Every color comes from the theme dict (derived from the user's picture).
     Achromatic extremes (black/white) are used only as luminance anchors.
     """
     bg, bar = colors["bg"], colors["bar"]
     inb, outb = colors["in"], colors["out"]
     text, accent = colors["text"], colors["accent"]
     reply = colors["reply"]
-    # image-derived semantic color (no hardcoded red anywhere)
     err = colors.get("error") or ensure_contrast(accent, bg)
 
     get_alpha = lambda k: max(0, min(255, round(255 * (1 - alphas.get(k, 0) / 100.0))))
@@ -158,24 +154,19 @@ def render_preview(colors, alphas, wall_bytes, wall_flat):
     p1_d.rounded_rectangle([0, 0, pw, ph], radius=p_radius,
                            fill=phone_body_1 + (255,))
 
-    # Chat wallpaper
+    # Chat wallpaper — ORIGINAL image; blurred only if user chose so
     chat_h = ph - 116 * S
     chat_y = 60 * S
     if wall_bytes:
-        w_img = _cover(Image.open(io.BytesIO(wall_bytes)), pw, chat_h)
-        tint = Image.new("RGBA", (pw, chat_h),
-                         (0, 0, 0, 100) if dark else (255, 255, 255, 90))
-        w_img = Image.alpha_composite(w_img.convert("RGBA"), tint)
+        src = Image.open(io.BytesIO(wall_bytes))
+        if blur:
+            src = src.filter(ImageFilter.GaussianBlur(12))
+        w_img = _cover(src, pw, chat_h).convert("RGBA")
         phone1_img.paste(w_img, (0, chat_y))
     else:
         wf = wall_flat if wall_flat else mix(bg, (0, 0, 0), 0.15 if dark else 0.03)
-        glow_img = Image.new("RGBA", (pw, chat_h), wf + (255,))
-        glow_d = ImageDraw.Draw(glow_img)
-        glow_col = mix(accent, (255, 255, 255), 0.2)
-        glow_d.ellipse([pw // 2 - 140 * S, chat_h // 2 - 140 * S,
-                        pw // 2 + 140 * S, chat_h // 2 + 140 * S],
-                       fill=glow_col + (40,))
-        phone1_img.paste(glow_img, (0, chat_y))
+        phone1_img.paste(Image.new("RGBA", (pw, chat_h), wf + (255,)),
+                         (0, chat_y))
     p1_d = ImageDraw.Draw(phone1_img)
 
     # Status bar + action bar
@@ -191,7 +182,7 @@ def render_preview(colors, alphas, wall_bytes, wall_flat):
     _draw_search_icon(p1_d, pw - 68 * S, 51 * S, 12 * S, bar_col)
     _draw_more_dots(p1_d, pw - 30 * S, 50 * S, 4 * S, 7 * S, bar_col)
 
-    # Date pill — darker surface + derived text color (no static white)
+    # Date pill — darker surface + derived text color
     pill_bg = mix(bg, (0, 0, 0), 0.40 if dark else 0.12)
     p1_d.rounded_rectangle([pw // 2 - 40 * S, 98 * S, pw // 2 + 40 * S, 116 * S],
                            radius=9 * S, fill=pill_bg + (160,))
@@ -319,8 +310,18 @@ def render_preview(colors, alphas, wall_bytes, wall_flat):
                                radius=3 * S, fill=mix(text, bg, 0.5) + (a_text,))
 
         if i % 3 == 1:
+            # Unread badge — dark tone bg + white digits (matches .attheme)
+            counter_bg = mix(accent, (0, 0, 0), 0.42)
             p2_d.ellipse([pw - 40 * S, ry + 36 * S, pw - 18 * S, ry + 58 * S],
-                         fill=accent + (a_acc,))
+                         fill=counter_bg + (255,))
+            bcx = (pw - 40 * S + pw - 18 * S) / 2
+            bcy = (ry + 36 * S + ry + 58 * S) / 2
+            d_txt = "3"
+            tw = p2_d.textlength(d_txt, font=None)
+            p2_d.rounded_rectangle([bcx - 4 * S, bcy - 5 * S,
+                                    bcx + tw + 2 * S, bcy + 3 * S],
+                                   radius=2 * S,
+                                   fill=readable_on(counter_bg) + (255,))
         elif i % 3 == 2:
             _draw_checkmarks(p2_d, pw - 40 * S, ry + 38 * S, 9 * S,
                              mix(accent, text, 0.4) + (a_acc,))
