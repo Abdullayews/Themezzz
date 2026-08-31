@@ -1,98 +1,13 @@
 import io
-
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter
 
 from colors import readable_on, mix, ensure_contrast, luminance
 
 
-# ---------- fonts ----------
-
-def _font(size, bold=False):
-    weight = "Bold" if bold else "Regular"
-    for path in (
-        f"/usr/share/fonts/truetype/roboto/unhinted/Roboto-{weight}.ttf",
-        f"/usr/share/fonts/truetype/roboto/Roboto-{weight}.ttf",
-        f"/usr/share/fonts/truetype/dejavu/DejaVuSans{'-Bold' if bold else ''}.ttf",
-    ):
-        try:
-            return ImageFont.truetype(path, size)
-        except Exception:
-            continue
-    try:
-        return ImageFont.load_default(size=size)
-    except TypeError:
-        return ImageFont.load_default()
-
-
-# ---------- icon primitives ----------
-
-def _paperclip(d, cx, cy, s, col):
-    r = s * 0.26
-    w = max(2, int(s * 0.10))
-    d.arc([cx - r, cy - r, cx + r, cy + r], 90, 270, fill=col, width=w)
-    d.arc([cx - r, cy - r * 1.75, cx + r, cy + r * 0.25], 270, 90, fill=col, width=w)
-    d.line([(cx, cy - r), (cx, cy + r)], fill=col, width=w)
-
-
-def _mic(d, cx, cy, s, col):
-    r = s * 0.14
-    w = max(2, int(s * 0.08))
-    d.rounded_rectangle([cx - r, cy - s * 0.32, cx + r, cy + s * 0.08],
-                        radius=r, fill=col)
-    d.arc([cx - s * 0.22, cy - s * 0.08, cx + s * 0.22, cy + s * 0.38],
-          0, 180, fill=col, width=w)
-    d.line([(cx, cy + s * 0.38), (cx, cy + s * 0.48)], fill=col, width=w)
-    d.line([(cx - s * 0.13, cy + s * 0.48), (cx + s * 0.13, cy + s * 0.48)],
-           fill=col, width=w)
-
-
-def _checks(d, x, y, s, col):
-    """✓✓ read marks."""
-    w = max(2, int(s * 0.12))
-    d.line([(x, y + s * 0.35), (x + s * 0.3, y + s * 0.7)], fill=col, width=w)
-    d.line([(x + s * 0.3, y + s * 0.7), (x + s * 0.7, y)], fill=col, width=w)
-    d.line([(x + s * 0.45, y + s * 0.35), (x + s * 0.75, y + s * 0.7)], fill=col, width=w)
-    d.line([(x + s * 0.75, y + s * 0.7), (x + s * 1.15, y)], fill=col, width=w)
-
-
-def _flame(d, cx, cy, h):
-    """🔥 drawn manually (no emoji font on servers)."""
-    outer = (255, 109, 0)
-    inner = (255, 214, 0)
-    d.polygon([(cx - 0.30 * h, cy + 0.18 * h), (cx, cy - 0.50 * h),
-               (cx + 0.30 * h, cy + 0.18 * h)], fill=outer)
-    d.ellipse([cx - 0.32 * h, cy - 0.05 * h, cx + 0.32 * h, cy + 0.45 * h], fill=outer)
-    d.polygon([(cx - 0.14 * h, cy + 0.22 * h), (cx, cy - 0.12 * h),
-               (cx + 0.14 * h, cy + 0.22 * h)], fill=inner)
-    d.ellipse([cx - 0.15 * h, cy + 0.12 * h, cx + 0.15 * h, cy + 0.42 * h], fill=inner)
-
-
-def _chevron_down(d, cx, cy, s, col):
-    w = max(2, int(s * 0.10))
-    d.line([(cx - s * 0.4, cy - s * 0.12), (cx, cy + s * 0.28)], fill=col, width=w)
-    d.line([(cx, cy + s * 0.28), (cx + s * 0.4, cy - s * 0.12)], fill=col, width=w)
-
-
-def _battery(d, x, cy, s, col):
-    w = max(1, int(s * 0.07))
-    d.rounded_rectangle([x, cy - s * 0.30, x + s * 0.95, cy + s * 0.30],
-                        radius=int(s * 0.08), outline=col, width=w)
-    d.rectangle([x + s * 0.15, cy - s * 0.16, x + s * 0.62, cy + s * 0.16], fill=col)
-    d.rectangle([x + s * 0.99, cy - s * 0.12, x + s * 1.08, cy + s * 0.12], fill=col)
-
-
-def _signal(d, x, cy, s, col):
-    w = s * 0.16
-    gap = s * 0.10
-    bottom = cy + s * 0.28
-    for i, h in enumerate((0.20, 0.36, 0.54, 0.74)):
-        hh = s * h
-        d.rectangle([x + i * (w + gap), bottom - hh,
-                     x + i * (w + gap) + w, bottom], fill=col)
-
+# ---------- helpers ----------
 
 def _cover(img, w, h):
-    """Center-crop image to fully cover w×h."""
+    """Center-crop image to fully cover w×h maintaining aspect ratio."""
     iw, ih = img.size
     scale = max(w / iw, h / ih)
     img = img.resize((int(iw * scale) + 1, int(ih * scale) + 1),
@@ -105,217 +20,180 @@ def _cover(img, w, h):
 
 def render_preview(colors, alphas, wall_bytes, wall_flat):
     """
-    1:1 Telegram Android chat screen:
-      status bar → action bar → date chip → bubbles (with reply block)
-      → gray hint → scroll-down FAB → input bar with pill + send button.
-    Two-pass alpha compositing = how Telegram layers per-key transparency.
-    Monochrome styling: elevation is darker, never lighter (Forest-style).
+    Renders a dual-phone minimalist wireframe preview matching the red mockup aesthetic:
+    - Left Phone: Chat View (chat bubbles, voice message waveform, status elements, reply block).
+    - Right Phone: Dialogs/Chat List View (avatar circles, skeleton text bars, badges, FAB button).
     """
     bg, bar = colors["bg"], colors["bar"]
     inb, outb = colors["in"], colors["out"]
     text, accent = colors["text"], colors["accent"]
     reply = colors["reply"]
 
-    A = lambda k: max(0, min(255, round(255 * (1 - alphas.get(k, 0) / 100.0))))
-    a_bar, a_in, a_out = A("bar"), A("in"), A("out")
-    a_text, a_acc, a_reply = A("text"), A("accent"), A("reply")
+    # Transparency helper: converts percentage to 0-255 alpha value
+    get_alpha = lambda k: max(0, min(255, round(255 * (1 - alphas.get(k, 0) / 100.0))))
+    a_bar = get_alpha("bar")
+    a_in, a_out = get_alpha("in"), get_alpha("out")
+    a_text = get_alpha("text")
+    a_acc = get_alpha("accent")
+    a_reply = get_alpha("reply")
 
     dark = luminance(bg) < 0.5
-    S = 2                                    # supersampling
-    W, H = 480 * S, 980 * S
-    SB, BAR, INP = 28 * S, 56 * S, 62 * S    # status / action / input heights
-    top, bot = SB + BAR, H - INP
 
-    # ---- derived tones (darker, never lighter) ----
-    bar_text = readable_on(bar)
-    bar_icon = mix(bar_text, bar, 0.15)
-    sb_col = mix(bar, (0, 0, 0), 0.22 if dark else 0.06)
-    in_text = ensure_contrast(text, inb)
-    out_text = ensure_contrast(text, outb)
-    in_time = mix(in_text, inb, 0.35)
-    out_time = mix(out_text, outb, 0.25)
-    reply_in = ensure_contrast(reply, inb)
-    reply_msg = mix(reply_in, inb, 0.15)
-    on_acc = readable_on(accent)
-    acc_bar = ensure_contrast(accent, bar)
-    acc_in = ensure_contrast(accent, inb)
-    gray2 = mix(text, bg, 0.45)
-    gray3 = mix(text, bg, 0.55)
-    divider = mix(bg, (0, 0, 0), 0.40) if dark else mix(bg, (0, 0, 0), 0.14)
-    fab = mix(accent, (0, 0, 0), 0.32 if dark else 0.18)   # darker circle buttons
-    on_fab = readable_on(fab)
+    # Resolution & Supersampling (2x)
+    S = 2
+    W, H = 1000 * S, 1000 * S
 
-    # ---- fonts ----
-    f_sb = _font(13 * S)
-    f_name = _font(17 * S, bold=True)
-    f_status = _font(13 * S)
-    f_text = _font(16 * S)
-    f_time = _font(11 * S)
-    f_chip = _font(13 * S)
-    f_reply = _font(12 * S)
-    f_reply_b = _font(12 * S, bold=True)
-    f_av = _font(20 * S, bold=True)
-    f_badge = _font(11 * S, bold=True)
+    # Dynamic canvas background tint derived from theme colors
+    outer_bg = mix(accent, (0, 0, 0) if dark else (255, 255, 255), 0.55 if dark else 0.35)
+    canvas = Image.new("RGBA", (W, H), outer_bg + (255,))
 
-    # ---- base: wallpaper in the chat area ----
+    # Phone dimensions
+    pw, ph = 410 * S, 830 * S
+    py = (H - ph) // 2
+    px1, px2 = 60 * S, 530 * S
+    p_radius = 46 * S
+
+    phone_body_1 = mix(bg, (0, 0, 0), 0.28 if dark else 0.06)
+    phone_body_2 = mix(bg, (0, 0, 0), 0.22 if dark else 0.09)
+
+    # ================= LEFT PHONE: CHAT VIEW =================
+    phone1_img = Image.new("RGBA", (pw, ph), (0, 0, 0, 0))
+    p1_d = ImageDraw.Draw(phone1_img)
+
+    # Body frame
+    p1_d.rounded_rectangle([0, 0, pw, ph], radius=p_radius, fill=phone_body_1 + (255,))
+
+    # Chat area background
+    chat_h = ph - 110 * S
+    chat_y = 55 * S
+
     if wall_bytes:
-        chat = _cover(Image.open(io.BytesIO(wall_bytes)), W, bot - top)
-        tint = Image.new("RGBA", (W, bot - top),
-                         (0, 0, 0, 100) if dark else (255, 255, 255, 110))
-        chat = Image.alpha_composite(chat.convert("RGBA"), tint).convert("RGB")
+        w_img = _cover(Image.open(io.BytesIO(wall_bytes)), pw, chat_h)
+        tint = Image.new("RGBA", (pw, chat_h), (0, 0, 0, 110) if dark else (255, 255, 255, 110))
+        w_img = Image.alpha_composite(w_img.convert("RGBA"), tint)
+        phone1_img.paste(w_img, (0, chat_y))
     else:
-        wf = wall_flat if wall_flat else mix(bg, (0, 0, 0), 0.25 if dark else 0.05)
-        chat = Image.new("RGB", (W, bot - top), wf)
-    img = Image.new("RGB", (W, H), bg)
-    img.paste(chat, (0, top))
-    img = img.convert("RGBA")
+        wf = wall_flat if wall_flat else mix(bg, (0, 0, 0), 0.18 if dark else 0.04)
+        glow_img = Image.new("RGBA", (pw, chat_h), wf + (255,))
+        glow_d = ImageDraw.Draw(glow_img)
+        glow_col = mix(accent, (255, 255, 255), 0.25)
+        glow_d.ellipse([pw // 2 - 150 * S, chat_h // 2 - 150 * S,
+                        pw // 2 + 150 * S, chat_h // 2 + 150 * S], fill=glow_col + (45,))
+        phone1_img.paste(glow_img, (0, chat_y))
 
-    # ================= PASS A — surfaces (per-section alpha) =================
-    ov = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    d = ImageDraw.Draw(ov)
+    p1_d = ImageDraw.Draw(phone1_img)
 
-    # status bar + action bar
-    d.rectangle([0, 0, W, SB], fill=sb_col + (a_bar,))
-    d.rectangle([0, SB, W, top], fill=bar + (a_bar,))
+    # Status Bar / Camera cutouts
+    p1_d.ellipse([25 * S, 20 * S, 41 * S, 36 * S], fill=mix(text, phone_body_1, 0.4) + (200,))
+    p1_d.rounded_rectangle([52 * S, 23 * S, 125 * S, 33 * S], radius=5 * S, fill=mix(text, phone_body_1, 0.4) + (200,))
+    p1_d.ellipse([pw - 41 * S, 20 * S, pw - 25 * S, 36 * S], fill=mix(text, phone_body_1, 0.4) + (200,))
 
-    # "Today" date chip — darker than bg, semi-transparent
-    chip_txt = "Today"
-    cw = int(d.textlength(chip_txt, font=f_chip) + 34 * S)
-    ch = 28 * S
-    ccy = top + 20 * S
-    d.rounded_rectangle([(W - cw) // 2, ccy, (W + cw) // 2, ccy + ch],
-                        radius=ch // 2,
-                        fill=(mix(bg, (0, 0, 0), 0.25) if dark
-                              else mix(bg, (0, 0, 0), 0.05)) + (200,))
+    # Top Action Bar elements
+    p1_d.rounded_rectangle([25 * S, 72 * S, 35 * S, 102 * S], radius=2 * S, fill=mix(bar, text, 0.3) + (a_bar,))
+    p1_d.rounded_rectangle([48 * S, 82 * S, 140 * S, 92 * S], radius=5 * S, fill=mix(bar, text, 0.3) + (a_bar,))
 
-    # ---- incoming bubble (with reply block inside) ----
-    p, R = 11 * S, 17 * S
-    r_un, r_msg = "Alex", "Check this out!"
-    rw = int(max(d.textlength(r_un, font=f_reply_b),
-                 d.textlength(r_msg, font=f_reply)) + 11 * S)
-    rh = 36 * S
-    mt1, t1 = "Hi! How's the theme?", "14:32"
-    mw1 = d.textlength(mt1, font=f_text)
-    tw1 = d.textlength(t1, font=f_time)
-    bw1 = int(max(mw1, rw, tw1 + 44 * S) + 2 * p)
-    bh1 = p + rh + 7 * S + f_text.size + 8 * S + f_time.size + p
-    bx1, by1 = 14 * S, top + 66 * S
-    d.rounded_rectangle([bx1 + 2 * S, by1 + 4 * S,
-                         bx1 + bw1 + 2 * S, by1 + bh1 + 4 * S],
-                        radius=R, fill=(0, 0, 0, 45 if dark else 26))
-    d.rounded_rectangle([bx1, by1, bx1 + bw1, by1 + bh1], radius=R,
-                        fill=inb + (a_in,), corners=(True, True, True, False))
+    # Incoming Bubble 1 with Reply block
+    p1_d.rounded_rectangle([25 * S, 125 * S, 240 * S, 172 * S], radius=16 * S, fill=inb + (a_in,))
+    p1_d.rectangle([35 * S, 135 * S, 38 * S, 162 * S], fill=reply + (a_reply,))
+    p1_d.rounded_rectangle([46 * S, 138 * S, 145 * S, 146 * S], radius=4 * S, fill=ensure_contrast(text, inb) + (a_text,))
+    p1_d.rounded_rectangle([46 * S, 151 * S, 200 * S, 158 * S], radius=3 * S, fill=mix(text, inb, 0.35) + (a_text,))
 
-    # ---- outgoing bubble ----
-    mt2, t2 = "LOOKS GREAT", "14:33"
-    mw2 = d.textlength(mt2, font=f_text)
-    tw2 = d.textlength(t2, font=f_time)
-    bw2 = int(mw2 + 30 * S + 46 * S + 2 * p)          # text + 🔥 + ✓✓time
-    bh2 = p + f_text.size + 8 * S + f_time.size + p
-    bx2, by2 = W - bw2 - 14 * S, by1 + bh1 + 14 * S
-    d.rounded_rectangle([bx2 + 2 * S, by2 + 4 * S,
-                         bx2 + bw2 + 2 * S, by2 + bh2 + 4 * S],
-                        radius=R, fill=(0, 0, 0, 45 if dark else 26))
-    d.rounded_rectangle([bx2, by2, bx2 + bw2, by2 + bh2], radius=R,
-                        fill=outb + (a_out,), corners=(True, True, False, True))
+    # Outgoing Bubble 1
+    p1_d.rounded_rectangle([145 * S, 215 * S, 385 * S, 258 * S], radius=16 * S, fill=outb + (a_out,))
+    p1_d.rounded_rectangle([160 * S, 231 * S, 365 * S, 242 * S], radius=5 * S, fill=ensure_contrast(text, outb) + (a_text,))
 
-    # ---- scroll-down FAB (darker circle) ----
-    fr = 22 * S
-    fcx, fcy = W - 46 * S, bot - 62 * S
-    d.ellipse([fcx - fr, fcy - fr, fcx + fr, fcy + fr], fill=fab + (235,))
+    # Outgoing Voice Message Bubble with Waveform
+    p1_d.rounded_rectangle([105 * S, 275 * S, 385 * S, 350 * S], radius=20 * S, fill=outb + (a_out,))
+    p1_d.ellipse([120 * S, 290 * S, 165 * S, 335 * S], fill=mix(outb, (0, 0, 0), 0.22) + (a_out,))
+    wave_x = 180 * S
+    waveform = [8, 16, 10, 24, 28, 14, 20, 16, 26, 12, 18, 10, 6]
+    for i, h_val in enumerate(waveform):
+        p1_d.rounded_rectangle([wave_x + i * 14 * S, 312 * S - h_val * S // 2,
+                                wave_x + i * 14 * S + 6 * S, 312 * S + h_val * S // 2],
+                               radius=3 * S, fill=ensure_contrast(text, outb) + (a_text,))
+    p1_d.rounded_rectangle([180 * S, 328 * S, 235 * S, 336 * S], radius=4 * S, fill=mix(text, outb, 0.35) + (a_text,))
 
-    # ---- input bar + pill + send button ----
-    d.rectangle([0, bot, W, H], fill=bg + (255,))
-    d.line([(0, bot), (W, bot)], fill=divider + (255,), width=S)
-    py0, py1 = bot + 9 * S, bot + 53 * S
-    d.rounded_rectangle([12 * S, py0, W - 78 * S, py1],
-                        radius=(py1 - py0) // 2,
-                        fill=(mix(bg, (0, 0, 0), 0.28) if dark
-                              else mix(bg, (0, 0, 0), 0.08)) + (255,))
-    scx, scy, sr = W - 40 * S, bot + 31 * S, 21 * S
-    d.ellipse([scx - sr, scy - sr, scx + sr, scy + sr], fill=accent + (a_acc,))
+    # Incoming Bubble 2
+    p1_d.rounded_rectangle([25 * S, 365 * S, 275 * S, 420 * S], radius=18 * S, fill=inb + (a_in,))
+    p1_d.ellipse([40 * S, 377 * S, 75 * S, 412 * S], fill=accent + (a_acc,))
+    p1_d.rounded_rectangle([85 * S, 382 * S, 245 * S, 392 * S], radius=4 * S, fill=ensure_contrast(text, inb) + (a_text,))
+    p1_d.rounded_rectangle([85 * S, 398 * S, 195 * S, 406 * S], radius=4 * S, fill=mix(text, inb, 0.35) + (a_text,))
 
-    img = Image.alpha_composite(img, ov)
+    # Additional background chat bubbles
+    p1_d.rounded_rectangle([170 * S, 435 * S, 385 * S, 475 * S], radius=16 * S, fill=outb + (a_out,))
+    p1_d.rounded_rectangle([120 * S, 490 * S, 385 * S, 530 * S], radius=16 * S, fill=outb + (a_out,))
 
-    # ================= PASS B — content (text & icons) =================
-    ov2 = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    d = ImageDraw.Draw(ov2)
+    # Bottom Input Bar
+    p1_d.rounded_rectangle([25 * S, ph - 60 * S, 120 * S, ph - 30 * S], radius=15 * S, fill=mix(bg, text, 0.18) + (255,))
+    p1_d.ellipse([pw - 60 * S, ph - 65 * S, pw - 20 * S, ph - 25 * S], fill=accent + (a_acc,))
+    p1_d.ellipse([pw - 110 * S, ph - 65 * S, pw - 70 * S, ph - 25 * S], fill=mix(bg, text, 0.18) + (255,))
 
-    # ---- status bar: clock / signal / battery ----
-    d.text((22 * S, (SB - f_sb.size) // 2), "9:41", font=f_sb, fill=bar_text)
-    _battery(d, W - 52 * S, SB // 2, 16 * S, bar_icon)
-    _signal(d, W - 106 * S, SB // 2, 16 * S, bar_icon)
+    # ================= RIGHT PHONE: CHAT LIST VIEW =================
+    phone2_img = Image.new("RGBA", (pw, ph), (0, 0, 0, 0))
+    p2_d = ImageDraw.Draw(phone2_img)
 
-    # ---- action bar: back / avatar / name / online / dots ----
-    cy = SB + BAR // 2
-    d.line([(38 * S, cy - 12 * S), (24 * S, cy)], fill=bar_icon, width=3 * S)
-    d.line([(24 * S, cy), (38 * S, cy + 12 * S)], fill=bar_icon, width=3 * S)
-    acx, ar = 62 * S, 17 * S
-    d.ellipse([acx - ar, cy - ar, acx + ar, cy + ar], fill=accent)
-    lw = d.textlength("C", font=f_av)
-    d.text((acx - lw / 2, cy - f_av.size * 0.62), "C", font=f_av, fill=on_acc)
-    d.text((90 * S, SB + 9 * S), "Chat", font=f_name, fill=bar_text)
-    d.text((90 * S, SB + 31 * S), "online", font=f_status, fill=acc_bar)
-    for i in range(3):
-        dy = cy - 9 * S + i * 9 * S
-        d.ellipse([(W - 27 * S), dy, (W - 22 * S), dy + 5 * S], fill=bar_icon)
+    # Body frame
+    p2_d.rounded_rectangle([0, 0, pw, ph], radius=p_radius, fill=phone_body_2 + (255,))
 
-    # ---- date chip text ----
-    ctw = d.textlength(chip_txt, font=f_chip)
-    d.text(((W - ctw) // 2, ccy + (ch - f_chip.size) // 2), chip_txt,
-           font=f_chip, fill=text + (235,))
+    # Status Bar
+    p2_d.ellipse([25 * S, 20 * S, 41 * S, 36 * S], fill=mix(text, phone_body_2, 0.4) + (200,))
+    p2_d.rounded_rectangle([52 * S, 23 * S, 125 * S, 33 * S], radius=5 * S, fill=mix(text, phone_body_2, 0.4) + (200,))
+    p2_d.ellipse([pw - 58 * S, 20 * S, pw - 42 * S, 36 * S], fill=mix(text, phone_body_2, 0.4) + (200,))
+    p2_d.ellipse([pw - 36 * S, 20 * S, pw - 20 * S, 36 * S], fill=mix(text, phone_body_2, 0.4) + (200,))
 
-    # ---- incoming bubble content (reply block + message) ----
-    rl_x = bx1 + p
-    d.rectangle([rl_x, by1 + p, rl_x + 3 * S, by1 + p + rh], fill=acc_in)
-    d.text((rl_x + 9 * S, by1 + p - 1 * S), r_un, font=f_reply_b,
-           fill=reply_in + (a_reply,))
-    d.text((rl_x + 9 * S, by1 + p + 16 * S), r_msg, font=f_reply,
-           fill=reply_msg + (a_reply,))
-    d.text((bx1 + p, by1 + p + rh + 7 * S), mt1, font=f_text,
-           fill=in_text + (a_text,))
-    d.text((bx1 + bw1 - p - tw1, by1 + bh1 - p - f_time.size), t1,
-           font=f_time, fill=in_time)
+    # Header Bar
+    p2_d.ellipse([25 * S, 58 * S, 50 * S, 83 * S], fill=mix(bar, text, 0.3) + (a_bar,))
+    p2_d.rounded_rectangle([65 * S, 66 * S, 175 * S, 76 * S], radius=5 * S, fill=mix(bar, text, 0.3) + (a_bar,))
+    p2_d.ellipse([pw - 40 * S, 58 * S, pw - 28 * S, 70 * S], fill=mix(bar, text, 0.3) + (a_bar,))
+    p2_d.ellipse([pw - 40 * S, 76 * S, pw - 28 * S, 88 * S], fill=mix(bar, text, 0.3) + (a_bar,))
+    p2_d.ellipse([pw - 60 * S, 58 * S, pw - 48 * S, 70 * S], fill=mix(bar, text, 0.3) + (a_bar,))
 
-    # ---- outgoing bubble content ----
-    d.text((bx2 + p, by2 + p), mt2, font=f_text, fill=out_text + (a_text,))
-    _flame(d, bx2 + p + mw2 + 16 * S, by2 + p + f_text.size * 0.55, 26 * S)
-    tx2 = bx2 + bw2 - p
-    _checks(d, tx2 - tw2 - 30 * S, by2 + bh2 - p - f_time.size, 13 * S,
-            mix(out_text, outb, 0.20))
-    d.text((tx2 - tw2, by2 + bh2 - p - f_time.size), t2, font=f_time, fill=out_time)
+    # Chat List Rows
+    row_y_start = 105 * S
+    row_height = 80 * S
 
-    # ---- gray centered hint ----
-    hint = "You can save and apply it"
-    hw = d.textlength(hint, font=f_status)
-    d.text(((W - hw) // 2, by2 + bh2 + 28 * S), hint, font=f_status, fill=gray2)
+    for i in range(8):
+        ry = row_y_start + i * row_height
 
-    # ---- FAB: chevron + unread badge ----
-    _chevron_down(d, fcx, fcy, 24 * S, on_fab)
-    br_ = 11 * S
-    bcx, bcy = fcx + fr - 6 * S, fcy - fr + 6 * S
-    d.ellipse([bcx - br_, bcy - br_, bcx + br_, bcy + br_], fill=accent)
-    bw_t = d.textlength("3", font=f_badge)
-    d.text((bcx - bw_t / 2, bcy - f_badge.size * 0.60), "3",
-           font=f_badge, fill=on_acc)
+        # Avatar placeholder
+        av_col = mix(accent, text, (i % 3) * 0.15)
+        p2_d.ellipse([25 * S, ry, 75 * S, ry + 50 * S], fill=av_col + (230,))
 
-    # ---- input bar: paperclip / hint / mic / send arrow ----
-    pv = (py0 + py1) // 2
-    _paperclip(d, 34 * S, pv, 20 * S, gray3)
-    d.text((58 * S, pv - f_status.size * 0.55), "Message...",
-           font=f_status, fill=mix(text, bg, 0.45))
-    _mic(d, W - 98 * S, pv, 20 * S, gray3)
-    hh = 20 * S
-    d.polygon([(scx - hh * 0.38, scy - hh * 0.5),
-               (scx - hh * 0.38, scy + hh * 0.5),
-               (scx + hh * 0.55, scy)], fill=on_acc)
+        # Name and message skeleton pills
+        name_w = 70 * S + ((i * 37) % 85) * S
+        msg_w = 115 * S + ((i * 53) % 115) * S
 
-    img = Image.alpha_composite(img, ov2).convert("RGB")
+        p2_d.rounded_rectangle([90 * S, ry + 10 * S, 90 * S + name_w, ry + 20 * S], radius=5 * S, fill=text + (a_text,))
+        p2_d.rounded_rectangle([90 * S, ry + 28 * S, 90 * S + msg_w, ry + 37 * S], radius=4 * S, fill=mix(text, bg, 0.45) + (a_text,))
 
-    # ---- downscale & save ----
-    img = img.resize((W // S, H // S), Image.Resampling.LANCZOS)
+        # Unread status indicators
+        if i % 3 == 1:
+            p2_d.ellipse([pw - 38 * S, ry + 18 * S, pw - 26 * S, ry + 30 * S], fill=accent + (a_acc,))
+        else:
+            p2_d.rounded_rectangle([pw - 55 * S, ry + 14 * S, pw - 25 * S, ry + 22 * S], radius=4 * S, fill=mix(text, bg, 0.5) + (a_text,))
+
+    # Floating Action Button (FAB)
+    fab_col = mix(accent, (0, 0, 0), 0.22 if dark else 0.12)
+    p2_d.ellipse([pw - 82 * S, ph - 92 * S, pw - 22 * S, ph - 32 * S], fill=fab_col + (240,))
+    p2_d.rounded_rectangle([pw - 60 * S, ph - 66 * S, pw - 44 * S, ph - 58 * S], radius=4 * S, fill=readable_on(fab_col) + (255,))
+
+    # ================= COMPOSITING & SHADOWS =================
+    shadow_img = Image.new("RGBA", (pw + 30 * S, ph + 30 * S), (0, 0, 0, 0))
+    sh_d = ImageDraw.Draw(shadow_img)
+    sh_d.rounded_rectangle([15 * S, 15 * S, pw + 15 * S, ph + 15 * S], radius=p_radius, fill=(0, 0, 0, 90 if dark else 45))
+    shadow_blur = shadow_img.filter(ImageFilter.GaussianBlur(18 * S))
+
+    # Apply soft drop-shadows and paste phone bodies onto outer canvas
+    canvas.paste(shadow_blur, (px1 - 15 * S, py - 10 * S), shadow_blur)
+    canvas.paste(phone1_img, (px1, py), phone1_img)
+
+    canvas.paste(shadow_blur, (px2 - 15 * S, py - 10 * S), shadow_blur)
+    canvas.paste(phone2_img, (px2, py), phone2_img)
+
+    # Downscale supersampled image for anti-aliased output
+    final_img = canvas.resize((W // S, H // S), Image.Resampling.LANCZOS).convert("RGB")
     buf = io.BytesIO()
     buf.name = "preview.png"
-    img.save(buf, "PNG")
+    final_img.save(buf, "PNG")
     buf.seek(0)
     return buf
