@@ -7,13 +7,8 @@ from PIL import Image
 AV = ["Blue", "Cyan", "Green", "Orange", "Pink", "Red", "Violet"]
 BLACK = (0, 0, 0)
 
-# Safety net ONLY for undecodable files: zero-saturation ramp (no chroma).
-# Never used for real images — extract_palette derives everything from the pic.
+# Used ONLY when a file can't be decoded at all (achromatic — no invented hue).
 _ACHROMATIC = ["#101010", "#2c2c2c", "#4d4d4d", "#707070", "#969696", "#bcbcbc"]
-
-# Semantic target hues (hue position only — saturation & lightness always
-# come from the picture's own colors):
-_HUE_LINK, _HUE_ERROR, _HUE_SUCCESS, _HUE_FLAME = 0.588, 0.02, 0.33, 0.07
 
 
 # ---------- Color math (WCAG) ----------
@@ -97,7 +92,6 @@ def _hue_deg(rgb):
 
 
 def _in_hue_deg(rgb, lo, hi):
-    """True if hue is in [lo, hi] degrees (wraps across 0)."""
     hd = _hue_deg(rgb)
     if lo <= hi:
         return lo <= hd <= hi
@@ -105,39 +99,35 @@ def _in_hue_deg(rgb, lo, hi):
 
 
 def _pick_hue(pal, lo, hi):
-    """Most saturated palette color whose hue is in range, else None."""
-    matches = [c for c in pal if _in_hue_deg(c, lo, hi)]
+    """Most saturated PIC color in the hue range — selection only, no invention."""
+    matches = [c for c in pal if saturation(c) >= 0.15 and _in_hue_deg(c, lo, hi)]
     return max(matches, key=saturation) if matches else None
 
 
-def _shift_hue(rgb, hue):
-    """Move hue, KEEP the picture color's own saturation & lightness."""
-    h, l, s = _hls(rgb)
-    return _to_rgb(hue, l, s)
+# ---------- Palette extraction (colors ONLY from the pic) ----------
 
-
-# ---------- Palette extraction (all colors from the pic) ----------
-
-def _palette_from_single(rgb, count):
-    """Build variants from one image color (used as in-pic fallback)."""
+def _tone_variants(rgb, count):
+    """Lighter/darker tones of one pic color — hue & saturation untouched."""
     h, l, s = _hls(rgb)
     out = [rgb]
-    if s < 0.08:
-        # achromatic image → achromatic ramp of its own lightness
-        for i in range(1, count):
-            ll = max(0.04, min(0.96, l + (i - count // 2) * 0.14))
-            out.append(_to_rgb(h, ll, 0.0))
-        return out[:count]
-    offsets = [-0.20, 0.12, 0.26, -0.08, 0.36, 0.18]
-    for i in range(1, count):
-        out.append(_to_rgb((h + i * 0.13) % 1.0,
-                           max(0.08, min(0.92, l + offsets[(i - 1) % len(offsets)])),
-                           s))
+    offsets = [0.16, -0.14, 0.30, -0.26, 0.42, -0.38, 0.54, -0.50]
+    i = 0
+    while len(out) < count and i < len(offsets) * 3:
+        off = offsets[i % len(offsets)] + (i // len(offsets)) * 0.06
+        ll = max(0.05, min(0.95, l + off))
+        cand = _to_rgb(h, ll, s)
+        if all(math.sqrt(sum((cand[k] - o[k]) ** 2 for k in range(3))) >= 45.0
+               for o in out):
+            out.append(cand)
+        i += 1
+    while len(out) < count:          # spread across lightness as last resort
+        ll = 0.05 + 0.90 * (len(out) - 1) / max(1, count - 1)
+        out.append(_to_rgb(h, max(0.05, min(0.95, ll)), s))
     return out[:count]
 
 
 def extract_palette(image_bytes, count=6):
-    """6 distinct colors from the image. Never raises, never static."""
+    """6 distinct colors from the image. Never raises, never invents hues."""
     try:
         img = Image.open(io.BytesIO(image_bytes))
         if img.mode in ("RGBA", "LA") or \
@@ -150,11 +140,11 @@ def extract_palette(image_bytes, count=6):
         else:
             img = img.convert("RGB")
     except Exception:
-        return list(_ACHROMATIC[:count])   # undecodable file only
+        return list(_ACHROMATIC[:count])
 
     try:
         avg = img.resize((1, 1), Image.Resampling.LANCZOS).getpixel((0, 0))
-        avg = tuple(avg[:3])
+        avg = tuple(int(c) for c in avg[:3])
     except Exception:
         avg = None
 
@@ -172,8 +162,10 @@ def extract_palette(image_bytes, count=6):
                 continue
             candidates.append(rgb)
 
-        if not candidates and avg:
-            return [rgb_to_hex(c) for c in _palette_from_single(avg, count)]
+        if not candidates:
+            if avg:
+                return [rgb_to_hex(c) for c in _tone_variants(avg, count)]
+            return list(_ACHROMATIC[:count])
 
         selected = [candidates[0]]
         for cand in candidates[1:]:
@@ -183,50 +175,74 @@ def extract_palette(image_bytes, count=6):
                    for sel in selected):
                 selected.append(cand)
 
-        while len(selected) < count:          # backfill: rotate the pic's own hues
-            h, s, v = colorsys.rgb_to_hsv(*[c / 255.0 for c in selected[-1]])
-            r, g, b = colorsys.hsv_to_rgb((h + 0.15) % 1.0, max(0.4, s), max(0.5, v))
-            selected.append((int(r * 255), int(g * 255), int(b * 255)))
+        if len(selected) < count:
+            # Backfill with TONES of the pic's own colors — never new hues
+            base = max(selected, key=saturation)
+            variants = _tone_variants(base, count * 2)
+            for cand in variants:
+                if len(selected) >= count:
+                    break
+                if cand not in selected and all(
+                        math.sqrt(sum((cand[i] - sel[i]) ** 2 for i in range(3))) >= 45.0
+                        for sel in selected):
+                    selected.append(cand)
+            j = 0
+            while len(selected) < count and j < len(variants):
+                if variants[j] not in selected:
+                    selected.append(variants[j])
+                j += 1
 
         return [rgb_to_hex(c) for c in selected[:count]]
     except Exception:
         if avg:
-            return [rgb_to_hex(c) for c in _palette_from_single(avg, count)]
+            return [rgb_to_hex(c) for c in _tone_variants(avg, count)]
         return list(_ACHROMATIC[:count])
 
 
 # ---------- Wallpaper ----------
 
-def prepare_wallpaper(data: bytes, max_side: int = 1080, quality: int = 75) -> bytes:
+def prepare_wallpaper(data: bytes, max_side: int = 1080) -> bytes:
+    """PNG — matches the format of your own theme export exactly."""
     img = Image.open(io.BytesIO(data)).convert("RGB")
     img.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
     buf = io.BytesIO()
-    img.save(buf, "JPEG", quality=quality)
+    img.save(buf, "PNG")
     return buf.getvalue()
 
 
-# ---------- Semantic colors, derived from the pic ----------
+# ---------- Semantic colors — pic colors & their tones ONLY ----------
 
-def _semantic(pal, bg, dark, lo, hi, hue, lmin, lmax):
-    """Pic color with matching hue, else hue-shifted donor; legibility-clamped."""
-    base = _pick_hue(pal, lo, hi)
-    if base is None:
-        donor = max(pal, key=saturation) if pal else bg
-        base = _shift_hue(donor, hue)
-    base = clamp_lightness(base, min_l=lmin if dark else None,
-                           max_l=None if dark else lmax)
-    return ensure_contrast(base, bg, 3.0)
-
-
-def derive_semantics(pal, bg, dark):
-    """link / error / success / flame / shadow — every value from the pic."""
+def derive_semantics(pal, bg, accent, dark):
+    """
+    link / error / success / flame / shadow.
+    RULE: only pic colors and their lighter/darker tones. If the pic has no
+    matching hue, fall back to the accent (a pic color) — never invent one.
+    """
     pal = list(pal) or [bg]
+
+    def pick(lo, hi):
+        return _pick_hue(pal, lo, hi)
+
+    def tone(base, lo_l=None, hi_l=None):
+        base = clamp_lightness(base, min_l=lo_l, max_l=hi_l)
+        return ensure_contrast(base, bg, 3.0)
+
+    if dark:
+        link = tone(pick(195, 265) or accent, min_l=0.42)
+        error = tone(pick(330, 25) or mix(accent, BLACK, 0.22), min_l=0.45)
+        success = tone(pick(90, 150) or mix(accent, BLACK, 0.12), min_l=0.42)
+        flame = tone(pick(10, 50) or accent, min_l=0.50)
+    else:
+        link = tone(pick(195, 265) or accent, max_l=0.45)
+        error = tone(pick(330, 25) or mix(accent, BLACK, 0.35), max_l=0.42)
+        success = tone(pick(90, 150) or mix(accent, BLACK, 0.25), max_l=0.42)
+        flame = tone(pick(10, 50) or accent, max_l=0.55)
     return {
-        "link":    _semantic(pal, bg, dark, 195, 265, _HUE_LINK,    0.42, 0.55),
-        "error":   _semantic(pal, bg, dark, 330, 25,  _HUE_ERROR,   0.45, 0.50),
-        "success": _semantic(pal, bg, dark, 90,  150, _HUE_SUCCESS, 0.42, 0.52),
-        "flame":   _semantic(pal, bg, dark, 10,  50,  _HUE_FLAME,   0.50, 0.60),
-        "shadow":  mix(bg, BLACK, 0.5 if dark else 0.15),
+        "link": link,
+        "error": error,
+        "success": success,
+        "flame": flame,
+        "shadow": mix(bg, BLACK, 0.5 if dark else 0.15),
     }
 
 
@@ -255,13 +271,13 @@ def resolve_theme(palette: list, sections: dict, mode: str = "dark") -> dict:
 
     res = {}
     res["bg"] = chosen("bg") or auto_bg
-    res["text"] = chosen("text") or ((255, 255, 255) if dark else (22, 24, 29))
+    res["text"] = chosen("text") or ((255, 255, 255) if dark else (20, 20, 20))
     res["accent"] = chosen("accent") or auto_accent
     res["bar"] = chosen("bar") or res["bg"]
     res["in"] = chosen("in") or mix(res["bg"], BLACK, 0.12 if dark else 0.05)
     res["out"] = chosen("out") or res["accent"]
     res["reply"] = chosen("reply") or res["text"]
-    res.update(derive_semantics(pal, res["bg"], dark))
+    res.update(derive_semantics(pal, res["bg"], res["accent"], dark))
     return res
 
 
@@ -291,9 +307,10 @@ def build_attheme(colors: dict, alphas: dict,
     inb, outb = colors["in"], colors["out"]
     text, accent = colors["text"], colors["accent"]
     reply = colors["reply"]
-    link = colors.get("link") or _shift_hue(accent, _HUE_LINK)
-    error = colors.get("error") or _shift_hue(accent, _HUE_ERROR)
-    success = colors.get("success") or _shift_hue(accent, _HUE_SUCCESS)
+    # fallbacks are the accent and its tones — never hue-shifted inventions
+    link = colors.get("link") or accent
+    error = colors.get("error") or mix(accent, BLACK, 0.25)
+    success = colors.get("success") or mix(accent, BLACK, 0.15)
     shadow = colors.get("shadow") or mix(bg, BLACK, 0.5)
 
     get_alpha = lambda k: max(0, min(255, round(255 * (1 - alphas.get(k, 0) / 100.0))))
@@ -304,6 +321,7 @@ def build_attheme(colors: dict, alphas: dict,
 
     dark = luminance(bg) < 0.5
 
+    # ---- tones: darker/lighter versions of the pic's colors only ----
     deep1 = mix(bg, BLACK, 0.18) if dark else mix(bg, BLACK, 0.04)
     deep2 = mix(bg, BLACK, 0.32) if dark else mix(bg, BLACK, 0.09)
     divider = mix(bg, BLACK, 0.45) if dark else mix(bg, BLACK, 0.14)
@@ -345,7 +363,7 @@ def build_attheme(colors: dict, alphas: dict,
         for k in keys:
             M[k] = (rgb, alpha)
 
-    # ===== Links — the pic's own blue (or accent hue-shifted to blue) =====
+    # ===== Links — the pic's own blue, or the accent if it has none =====
     put(["windowBackgroundWhiteLinkText", "dialogTextLink", "chat_messageLinkIn",
          "chat_messageLinkOut", "chat_serviceLink"], link)
 
@@ -633,7 +651,7 @@ def build_attheme(colors: dict, alphas: dict,
     put("inappPlayerTitle", text)
     put(["inappPlayerPlayPause", "inappPlayerClose"], acc_text)
 
-    # ===== Red / green semantics — derived from the pic =====
+    # ===== Red / green semantics — pic colors or accent tones =====
     put(["chats_draft", "chat_reportSpam", "chat_sentError", "chats_sentError",
          "dialogTextRed", "windowBackgroundWhiteRedText",
          "windowBackgroundWhiteRedText2", "windowBackgroundWhiteRedText3",
@@ -650,15 +668,23 @@ def build_attheme(colors: dict, alphas: dict,
     body = ("\n".join(lines) + "\n").encode("utf-8")
 
     if wallpaper:
-        offset = 0
-        header = b""
-        for _ in range(6):
-            header = f"wallpaperFileOffset={offset}\n".encode("utf-8")
-            new_offset = len(header) + len(body)
-            if new_offset == offset:
+        # YOUR app's native format (from your own exported theme):
+        #   wallpaperFileOffset=<N>   ← first line, N = byte where image starts
+        #   <color lines>
+        #   (blank line)
+        #   WPS
+        #   <raw PNG bytes>
+        # Nagram reads WPS; mainline Telegram reads the offset. Both point
+        # at the same bytes.
+        marker = b"\nWPS\n"
+        header = b"wallpaperFileOffset=0\n"
+        for _ in range(8):
+            offset = len(header) + len(body) + len(marker)
+            new_header = f"wallpaperFileOffset={offset}\n".encode("utf-8")
+            if new_header == header:
                 break
-            offset = new_offset
-        return header + body + wallpaper
+            header = new_header
+        return header + body + marker + wallpaper
 
     r, g, b = wall_flat if wall_flat else deep2
     return body + f"chat_wallpaper={_rgb_to_attheme_int((r, g, b), 255)}\n".encode("utf-8")
