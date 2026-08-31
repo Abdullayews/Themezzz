@@ -2,18 +2,13 @@ import colorsys
 import io
 import math
 
-from PIL import Image
+from PIL import Image, ImageFilter
 
 AV = ["Blue", "Cyan", "Green", "Orange", "Pink", "Red", "Violet"]
 BLACK = (0, 0, 0)
 
 # Used ONLY when a file can't be decoded at all (achromatic — no invented hue).
 _ACHROMATIC = ["#101010", "#2c2c2c", "#4d4d4d", "#707070", "#969696", "#bcbcbc"]
-
-# Wallpaper tint — a darker/lighter TONE of the user's picture, mode-driven.
-# Used identically by preview.py and build_attheme() → WYSIWYG.
-WALL_TINT_DARK = (0, 0, 0, 100)        # ≈ 39% darker tone
-WALL_TINT_LIGHT = (255, 255, 255, 60)  # ≈ 24% lighter tone
 
 
 # ---------- Color math (WCAG) ----------
@@ -40,6 +35,7 @@ def luminance(rgb):
 
 
 def mix(c1, c2, weight=0.5):
+    """weight=1.0 → c1, weight=0.0 → c2."""
     w = max(0.0, min(1.0, float(weight)))
     return tuple(max(0, min(255, round(c1[i] * w + c2[i] * (1.0 - w))))
                  for i in range(3))
@@ -55,11 +51,7 @@ def readable_on(bg):
 
 
 def ensure_contrast(fg, bg, min_ratio=3.0):
-    """
-    Gentle contrast fix: steps toward white/black only as far as needed.
-    Never blows the color all the way to the extreme — keeps the pic's tone.
-    (Telegram's own values sit around 2.5-3.5; 4.5 was overkill.)
-    """
+    """Gentle: steps only as far as needed, keeps the pic's tone."""
     if contrast_ratio(fg, bg) >= min_ratio:
         return fg
     target = readable_on(bg)
@@ -135,7 +127,7 @@ def _tone_variants(rgb, count):
                for o in out):
             out.append(cand)
         i += 1
-    while len(out) < count:          # spread across lightness as last resort
+    while len(out) < count:
         ll = 0.05 + 0.90 * (len(out) - 1) / max(1, count - 1)
         out.append(_to_rgb(h, max(0.05, min(0.95, ll)), s))
     return out[:count]
@@ -191,7 +183,6 @@ def extract_palette(image_bytes, count=6):
                 selected.append(cand)
 
         if len(selected) < count:
-            # Backfill with TONES of the pic's own colors — never new hues
             base = max(selected, key=saturation)
             variants = _tone_variants(base, count * 2)
             for cand in variants:
@@ -217,7 +208,7 @@ def extract_palette(image_bytes, count=6):
 # ---------- Wallpaper ----------
 
 def prepare_wallpaper(data: bytes, max_side: int = 1080) -> bytes:
-    """PNG — matches the format of your own theme export exactly."""
+    """PNG — matches the format of your own theme export. NO tint — original."""
     img = Image.open(io.BytesIO(data)).convert("RGB")
     img.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
     buf = io.BytesIO()
@@ -225,14 +216,12 @@ def prepare_wallpaper(data: bytes, max_side: int = 1080) -> bytes:
     return buf.getvalue()
 
 
-def tint_wallpaper(wall_bytes: bytes, dark: bool) -> bytes:
-    """Darken (dark mode) / lighten (light mode) the wallpaper — a tone
-    adjustment of the user's own image, identical to the preview's tint."""
-    img = Image.open(io.BytesIO(wall_bytes)).convert("RGBA")
-    tint = Image.new("RGBA", img.size, WALL_TINT_DARK if dark else WALL_TINT_LIGHT)
-    out = Image.alpha_composite(img, tint).convert("RGB")
+def blur_wallpaper(wall_bytes: bytes, radius: int = 14) -> bytes:
+    """User-selectable blur — a transformation of their own image, no new color."""
+    img = Image.open(io.BytesIO(wall_bytes)).convert("RGB")
+    img = img.filter(ImageFilter.GaussianBlur(radius))
     buf = io.BytesIO()
-    out.save(buf, "PNG")
+    img.save(buf, "PNG")
     return buf.getvalue()
 
 
@@ -292,7 +281,6 @@ def resolve_theme(palette: list, sections: dict, mode: str = "dark") -> dict:
     most_sat = max(pal, key=saturation)
 
     auto_bg = set_lightness(darkest, 0.07) if dark else set_lightness(lightest, 0.96)
-    # 0.55 (was 0.62): keeps the pic's natural brightness, no over-brightening
     auto_accent = clamp_lightness(most_sat, min_l=0.55) if dark \
         else clamp_lightness(most_sat, max_l=0.50)
 
@@ -329,12 +317,12 @@ def _rgb_to_attheme_int(rgb, alpha=255):
 
 
 def build_attheme(colors: dict, alphas: dict,
-                  wallpaper: bytes | None = None, wall_flat=None) -> bytes:
+                  wallpaper: bytes | None = None, wall_flat=None,
+                  blur: bool = False) -> bytes:
     bg, bar = colors["bg"], colors["bar"]
     inb, outb = colors["in"], colors["out"]
     text, accent = colors["text"], colors["accent"]
     reply = colors["reply"]
-    # fallbacks are the accent and its tones — never hue-shifted inventions
     link = colors.get("link") or accent
     error = colors.get("error") or mix(accent, BLACK, 0.25)
     success = colors.get("success") or mix(accent, BLACK, 0.15)
@@ -353,27 +341,28 @@ def build_attheme(colors: dict, alphas: dict,
     deep2 = mix(bg, BLACK, 0.32) if dark else mix(bg, BLACK, 0.09)
     divider = mix(bg, BLACK, 0.45) if dark else mix(bg, BLACK, 0.14)
 
-    # ---- SOLID tone mixes (no alpha pairs — that washed out Settings) ----
     bar_text = ensure_contrast(text, bar)
-    bar_sub = mix(bar_text, bar, 0.35)     # solid secondary on the bar
-    bar_icon = mix(bar_text, bar, 0.18)    # solid icon color
+    # FIX: weights were inverted — secondary tones must be TEXT-heavy, not bg-heavy
+    bar_sub = mix(bar_text, bar, 0.60)
+    bar_icon = mix(bar_text, bar, 0.80)
 
     in_text = ensure_contrast(text, inb)
     out_text = ensure_contrast(text, outb)
-    in_time = mix(in_text, inb, 0.30)      # solid timestamp tone
-    out_time = mix(out_text, outb, 0.25)
+    in_time = mix(in_text, inb, 0.60)
+    out_time = mix(out_text, outb, 0.62)
 
     acc_text = ensure_contrast(accent, bg)
-    on_acc = readable_on(accent)           # glyph on accent surfaces
+    on_acc = readable_on(accent)
     acc_in = ensure_contrast(accent, inb)
     acc_out = ensure_contrast(accent, outb)
     reply_in = ensure_contrast(reply, inb)
     reply_out = ensure_contrast(reply, outb)
 
-    # solid grays = tone mixes of the pic's own text color
-    gray1 = mix(text, bg, 0.25)            # strong secondary
-    gray2 = mix(text, bg, 0.40)            # descriptions, timestamps
-    gray3 = mix(text, bg, 0.55)            # hints, disabled
+    # FIX: was mix(text, bg, 0.25/0.40/0.55) → mostly-bg = INVISIBLE texts.
+    # Now text-heavy ramp: strong secondary / description / hint.
+    gray1 = mix(text, bg, 0.70)
+    gray2 = mix(text, bg, 0.55)
+    gray3 = mix(text, bg, 0.42)
 
     thumb = readable_on(bg)
     in_sel = mix(inb, BLACK, 0.12)
@@ -384,9 +373,9 @@ def build_attheme(colors: dict, alphas: dict,
     fab_pressed = mix(fab, BLACK, 0.15)
     on_fab = readable_on(fab)
 
-    # COUNTERS: dark tone background + white digits (fixes unread numbers)
+    # COUNTERS: dark tone background + white digits
     counter_bg = mix(accent, BLACK, 0.42)
-    on_counter = readable_on(counter_bg)   # dark tone → white digits
+    on_counter = readable_on(counter_bg)
 
     M = {}
 
@@ -396,11 +385,11 @@ def build_attheme(colors: dict, alphas: dict,
         for k in keys:
             M[k] = (rgb, alpha)
 
-    # ===== Links — the pic's own blue, or the accent if it has none =====
+    # ===== Links =====
     put(["windowBackgroundWhiteLinkText", "dialogTextLink", "chat_messageLinkIn",
          "chat_messageLinkOut", "chat_serviceLink"], link)
 
-    # ===== Surfaces = bg (opaque — drawer & forward stay solid) =====
+    # ===== Surfaces = bg (opaque) =====
     put(["windowBackgroundWhite", "windowBackgroundGray", "windowBackgroundBlack",
          "dialogBackground", "dialogBackgroundGray", "graySection",
          "actionBarDefaultSubmenuBackground", "chats_menuBackground",
@@ -605,7 +594,6 @@ def build_attheme(colors: dict, alphas: dict,
          "location_sendLiveLocationBackground",
          "location_placeLocationBackground", "chat_messagePanelVoicePressed",
          "chat_botProgress"], accent, a_acc)
-    # glyphs drawn ON accent-colored surfaces
     put(["chat_attachGalleryIcon", "chat_attachVideoIcon",
          "chat_attachFileIcon", "chat_attachContactIcon",
          "chat_attachLocationIcon", "chat_attachHideIcon",
@@ -618,7 +606,7 @@ def build_attheme(colors: dict, alphas: dict,
          "featuredStickers_buttonText", "undo_cancelColor", "undo_infoColor",
          "musicPicker_checkboxCheck", "groupcreate_checkboxCheck"], on_acc)
 
-    # ===== Counters & badges: DARK tone bg + white digits =====
+    # ===== Counters & badges =====
     put(["chats_unreadCounter", "chats_verifiedBackground",
          "chats_archivePinBackground", "chat_emojiPanelBadgeBackground",
          "picker_badge", "dialogBadgeBackground"], counter_bg)
@@ -626,7 +614,7 @@ def build_attheme(colors: dict, alphas: dict,
          "dialogBadgeText", "chat_emojiPanelBadgeText",
          "chats_menuItemCheck"], on_counter)
 
-    # ===== Circle buttons (FAB) — darker accent =====
+    # ===== Circle buttons (FAB) =====
     put(["chats_actionBackground", "dialogFloatingButton",
          "chat_goDownButtonCounterBackground"], fab)
     put(["chats_actionPressedBackground", "dialogFloatingButtonPressed",
@@ -681,7 +669,7 @@ def build_attheme(colors: dict, alphas: dict,
     put("inappPlayerTitle", text)
     put(["inappPlayerPlayPause", "inappPlayerClose"], acc_text)
 
-    # ===== Red / green semantics — pic colors or accent tones =====
+    # ===== Red / green semantics =====
     put(["chats_draft", "chat_reportSpam", "chat_sentError", "chats_sentError",
          "dialogTextRed", "windowBackgroundWhiteRedText",
          "windowBackgroundWhiteRedText2", "windowBackgroundWhiteRedText3",
@@ -698,14 +686,9 @@ def build_attheme(colors: dict, alphas: dict,
     body = ("\n".join(lines) + "\n").encode("utf-8")
 
     if wallpaper:
-        # tint the wallpaper EXACTLY like the preview does → WYSIWYG
-        wallpaper = tint_wallpaper(wallpaper, dark)
-        # YOUR app's native format (from your own exported theme):
-        #   wallpaperFileOffset=<N>   ← first line, N = byte where image starts
-        #   <color lines>
-        #   (blank line)
-        #   WPS
-        #   <raw PNG bytes>
+        # ORIGINAL image (no tint). Blur only if the user asked for it.
+        if blur:
+            wallpaper = blur_wallpaper(wallpaper)
         marker = b"\nWPS\n"
         header = b"wallpaperFileOffset=0\n"
         for _ in range(8):
