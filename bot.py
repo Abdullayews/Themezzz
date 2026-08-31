@@ -51,6 +51,7 @@ WELCOME = (
     "4️⃣ Choose a color (⚡ auto, №1-6 suggested, or type #hex)\n"
     "    and set transparency with the slider\n"
     "5️⃣ ✅ Create theme — done!\n\n"
+    "🔍 Wallpaper can be blurred or original — toggle it in the Wall section\n"
     "🏷 Reply = username + quoted text in replies (white by default)\n"
     "🔄 Reset clears only the part you're editing.\n"
     "📸 <b>Send a picture to start!</b>"
@@ -69,6 +70,7 @@ def default_state(palette, wall_bytes):
         "wall_mode": "image" if wall_bytes else "flat",
         "wall_idx": -1,
         "wall_custom": None,
+        "wall_blur": False,                       # 🔍 blur toggle
         "wall_bytes": wall_bytes,
         "msg_id": None,
         "mode_img": "photo",
@@ -110,7 +112,7 @@ def caption(st):
     def fmt(k):
         if k == "wall":
             if st["wall_mode"] == "image" and st["wall_bytes"]:
-                return "image"
+                return "image" + (" · blur" if st.get("wall_blur") else "")
             return rgb_to_hex(resolve_wall(st["palette"], st["wall_idx"],
                                            st["wall_custom"], st["mode"]))
         s = st["sections"][k]
@@ -156,6 +158,10 @@ def keyboard(st):
             InlineKeyboardButton(("● " if st["wall_mode"] == "flat" else "○ ")
                                  + "🎨 Flat", callback_data="wp:flat"),
         ])
+        if st["wall_bytes"]:
+            rows.append([InlineKeyboardButton(
+                f"🔍 Blur: {'On' if st.get('wall_blur') else 'Off'}",
+                callback_data="wb:toggle")])
         if st["wall_mode"] == "flat" or not st["wall_bytes"]:
             row = [InlineKeyboardButton(
                 "⚡" + ("●" if cs["idx"] == -1 and not cs["custom"] else ""),
@@ -203,7 +209,7 @@ def build_payload(st):
     wall = st["wall_bytes"] if (st["wall_mode"] == "image" and st["wall_bytes"]) else None
     wall_flat = resolve_wall(st["palette"], st["wall_idx"], st["wall_custom"],
                              st["mode"])
-    png = render_preview(res, alphas, wall, wall_flat)
+    png = render_preview(res, alphas, wall, wall_flat, st.get("wall_blur", False))
     return png, caption(st), keyboard(st)
 
 
@@ -336,7 +342,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         wall_flat = None if wall else resolve_wall(st["palette"], st["wall_idx"],
                                                    st["wall_custom"], st["mode"])
         try:
-            theme = build_attheme(res, alphas, wall, wall_flat)
+            theme = build_attheme(res, alphas, wall, wall_flat,
+                                  blur=st.get("wall_blur", False))
         except Exception as e:
             logger.error(f"Build failed: {e}")
             await context.bot.send_message(
@@ -379,11 +386,14 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         st["wall_mode"] = "image"
     elif data == "wp:flat":
         st["wall_mode"] = "flat"
+    elif data == "wb:toggle" and st["wall_bytes"]:
+        st["wall_blur"] = not st.get("wall_blur", False)
     elif data == "reset":
         # ONLY the active part is reset (mode is not touched)
         if st["active"] == "wall":
             st["wall_mode"] = "image" if st["wall_bytes"] else "flat"
             st["wall_idx"], st["wall_custom"] = -1, None
+            st["wall_blur"] = False
         else:
             s = st["sections"][st["active"]]
             s["idx"], s["custom"], s["alpha"] = -1, None, 0
