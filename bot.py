@@ -51,7 +51,7 @@ WELCOME = (
     "4️⃣ Choose a color (⚡ auto, №1-6 suggested, or type #hex)\n"
     "    and set transparency with the slider\n"
     "5️⃣ ✅ Create theme — done!\n\n"
-    "🏷 Reply section = username + quoted text in replies (white by default)\n"
+    "🏷 Reply = username + quoted text in replies (white by default)\n"
     "🔄 Reset clears only the part you're editing.\n"
     "📸 <b>Send a picture to start!</b>"
 )
