@@ -223,8 +223,8 @@ def derive_semantics(pal, bg, accent, dark):
     def pick(lo, hi):
         return _pick_hue(pal, lo, hi)
 
-    def tone(base, lo_l=None, hi_l=None):
-        base = clamp_lightness(base, min_l=lo_l, max_l=hi_l)
+    def tone(base, min_l=None, max_l=None):
+        base = clamp_lightness(base, min_l=min_l, max_l=max_l)
         return ensure_contrast(base, bg, 3.0)
 
     if dark:
