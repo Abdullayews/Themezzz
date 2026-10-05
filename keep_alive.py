@@ -6,7 +6,7 @@ import urllib.request
 
 logger = logging.getLogger("keep_alive")
 
-PING_INTERVAL = 540  # 9 min — Render spins down after 15 min without traffic
+PING_INTERVAL = 60  # 1 min — Render spins down after 15 min without traffic
 
 
 def _ping_loop():
