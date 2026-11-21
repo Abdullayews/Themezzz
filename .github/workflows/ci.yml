@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --locked --verbose
+      - name: Run tests
+        run: cargo test --locked --verbose
+      - name: Render preview smoke test
+        run: cargo run --locked --bin render_preview
+      - name: Check previews are non-blank
+        run: |
+          python3 - <<'EOF'
+          from PIL import Image
+          import sys
+          ok = True
+          for p in ("assets/preview_dark.png", "assets/preview_light.png"):
+              im = Image.open(p).convert("L")
+              h = im.histogram()
+              non_white = 1 - h[255] / sum(h)
+              print(f"{p}: {im.size} non-white={non_white:.3f}")
+              if non_white < 0.5:
+                  print(f"FAIL: {p} looks blank")
+                  ok = False
+          sys.exit(0 if ok else 1)
+          EOF
+
+  fmt-clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format check
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings

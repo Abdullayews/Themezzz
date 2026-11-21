@@ -5,23 +5,37 @@ use teloxide::types::MessageId;
 
 /// Section key + short button label (order matters: rows of 4).
 pub const SECTIONS: [(&str, &str); 8] = [
-    ("bg", "🖼 BG"), ("bar", "📊 Bar"), ("in", "📥 In"), ("out", "📤 Out"),
-    ("text", "🐻‍❄️ Text"), ("accent", "🔵 Accent"), ("reply", "🏷 Reply"),
+    ("bg", "🖼 BG"),
+    ("bar", "📊 Bar"),
+    ("in", "📥 In"),
+    ("out", "📤 Out"),
+    ("text", "🐻‍❄️ Text"),
+    ("accent", "🔵 Accent"),
+    ("reply", "🏷 Reply"),
     ("wall", "🌇 Wall"),
 ];
 
 /// Full display name of a section.
 pub fn sec_full(k: &str) -> &'static str {
     match k {
-        "bar" => "Top bar", "in" => "Incoming bubble",
-        "out" => "Outgoing bubble", "text" => "Text", "accent" => "Accent",
-        "reply" => "Reply (tag)", "wall" => "Wallpaper", _ => "Background",
+        "bar" => "Top bar",
+        "in" => "Incoming bubble",
+        "out" => "Outgoing bubble",
+        "text" => "Text",
+        "accent" => "Accent",
+        "reply" => "Reply (tag)",
+        "wall" => "Wallpaper",
+        _ => "Background",
     }
 }
 
 /// Short label lookup for captions.
 pub fn sec_label(k: &str) -> &'static str {
-    SECTIONS.iter().find(|(key, _)| *key == k).map(|&(_, l)| l).unwrap_or("BG")
+    SECTIONS
+        .iter()
+        .find(|(key, _)| *key == k)
+        .map(|&(_, l)| l)
+        .unwrap_or("BG")
 }
 
 /// Sections with a color choice.
@@ -65,16 +79,29 @@ impl EditorState {
     /// Color choice of the currently active section (or the wallpaper).
     pub fn active_color_state(&self) -> SectionChoice {
         if self.active == "wall" {
-            SectionChoice { idx: self.wall_idx, alpha: 0, custom: self.wall_custom }
+            SectionChoice {
+                idx: self.wall_idx,
+                alpha: 0,
+                custom: self.wall_custom,
+            }
         } else {
-            self.sections.get(self.active.as_str()).cloned().unwrap_or_default()
+            self.sections
+                .get(self.active.as_str())
+                .cloned()
+                .unwrap_or_default()
         }
     }
 
     /// ALPHA_SECTIONS → alpha percentages, for rendering and .attheme build.
     pub fn alpha_map(&self) -> std::collections::BTreeMap<String, u32> {
-        ALPHA_SECTIONS.iter()
-            .map(|k| (k.to_string(), self.sections.get(*k).map(|s| s.alpha).unwrap_or(0)))
+        ALPHA_SECTIONS
+            .iter()
+            .map(|k| {
+                (
+                    k.to_string(),
+                    self.sections.get(*k).map(|s| s.alpha).unwrap_or(0),
+                )
+            })
             .collect()
     }
 }

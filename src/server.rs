@@ -8,8 +8,12 @@ pub async fn start_server() {
         "/",
         axum::routing::get(|| async { "Themezzz bot is running 🚀" }),
     );
-    let port: u16 = std::env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8080);
-    let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await
+    let port: u16 = std::env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(8080);
+    let listener = tokio::net::TcpListener::bind(("0.0.0.0", port))
+        .await
         .unwrap_or_else(|e| panic!("cannot bind health-check server on port {port}: {e}"));
     tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, app).await {

@@ -2,5 +2,8 @@
 
 pub fn bot_token() -> String {
     let _ = dotenvy::dotenv();
-    std::env::var("BOT_TOKEN").unwrap_or_default().trim().to_string()
+    std::env::var("BOT_TOKEN")
+        .unwrap_or_default()
+        .trim()
+        .to_string()
 }
