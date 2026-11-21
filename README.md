@@ -161,13 +161,18 @@ The repo ships a `render.yaml` blueprint:
 ## 🧪 Testing
 
 ```bash
-cargo test          # 7 unit tests: color math, palette, theme resolution,
-                    # attheme serialization, wallpaper embedding
-cargo run --bin render_preview   # regenerate assets/preview_*.png
+cargo test                        # 7 unit tests: color math, palette, theme
+                                  # resolution, attheme serialization,
+                                  # wallpaper embedding
+cargo run --bin render_preview    # regenerate assets/preview_*.png
+cargo run --bin make_theme        # offline .attheme smoke test (stdout
+                                  # or: -- out.attheme writes the file)
 ```
 
-The `render_preview` binary is also the visual regression tool — run it
-after touching `preview.rs` and eyeball the two PNGs.
+`render_preview` doubles as the visual regression tool — run it after
+touching `preview.rs` and eyeball the two PNGs. `make_theme` replaces the
+old Python `smoke_test.py`: it resolves a built-in palette and dumps a
+517-key `.attheme` without touching Telegram.
 
 ## 🗺 Roadmap
 
