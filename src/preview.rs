@@ -4,7 +4,7 @@
 //! Drawn at 1000×1000 with supersampling S=2 and downscaled with
 //! Lanczos3, exactly like the original.
 
-use crate::colors::{ensure_contrast, luminance, mix, readable_on, Resolved, Rgb};
+use crate::colors::{clamp_lightness, ensure_contrast, luminance, mix, readable_on, Resolved, Rgb};
 use image::{DynamicImage, GenericImageView, Rgba, RgbaImage};
 use std::collections::BTreeMap;
 
@@ -209,6 +209,25 @@ fn paste(img: &mut RgbaImage, src: &RgbaImage, dx: i64, dy: i64) {
     paste_rgba(img, src, dx, dy)
 }
 
+/// Blend a translucent color over a rectangle of the image (scrim/overlay).
+fn d_scrim(img: &mut RgbaImage, x0: f64, y0: f64, x1: f64, y1: f64, col: C) {
+    let sa = f64::from(col.0[3]) / 255.0;
+    let x0 = x0.max(0.0) as u32;
+    let y0 = y0.max(0.0) as u32;
+    let x1 = (x1.min(f64::from(img.width())) as u32).max(x0);
+    let y1 = (y1.min(f64::from(img.height())) as u32).max(y0);
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let p = img.get_pixel_mut(x, y);
+            for c in 0..3 {
+                let s = f64::from(col.0[c]);
+                let d = f64::from(p[c]);
+                p[c] = (s * sa + d * (1.0 - sa)).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+}
+
 /// Public alias used by the thumbnail renderer.
 pub(crate) fn paste_rgba(img: &mut RgbaImage, src: &RgbaImage, dx: i64, dy: i64) {
     for (_sy, row) in src.enumerate_rows() {
@@ -363,6 +382,15 @@ fn draw_status_bar(d: &mut D, pw: i64, text: Rgb, body: Rgb, s: f64) {
         220,
     ]));
     let w = (1.5 * s).max(1.0);
+    // Dedicated dark status zone behind the glyphs (like a real OS bar),
+    // so they never read as artifacts over the wallpaper/header seam.
+    d.rectf(
+        0.0,
+        0.0,
+        pw as f64,
+        30.0 * s,
+        (mix(body, Rgb::new(0, 0, 0), 0.45), 255u8).into(),
+    );
     // Camera punch hole (hardware black — achromatic)
     d.ellipse(
         pw as f64 / 2.0 - 5.0 * s,
@@ -479,21 +507,19 @@ fn draw_clip_icon(d: &mut D, x: f64, y: f64, s: f64, color: Rgb, a: u8) {
 fn draw_pencil_icon(d: &mut D, cx: f64, cy: f64, size: f64, color: Rgb, a: u8) {
     let col = C(Rgba([color.r, color.g, color.b, a]));
     let w = (size * 0.2).max(2.0);
-    d.line(
-        cx - size / 2.0,
-        cy + size / 2.0,
-        cx + size / 2.0,
-        cy - size / 2.0,
-        w,
-        col,
-    );
-    // nib tip (small triangle)
     let k = size / 2.0;
+    // Body: two parallel lines (barrel) meeting at a chisel tip, plus a
+    // small nib triangle — reads clearly as ✎ at small sizes.
+    d.line(cx - k, cy + k, cx + k * 0.5, cy - k * 0.5, w, col);
+    d.line(cx - k * 0.6, cy + k, cx + k, cy - k, w * 0.7, col);
+    // chisel tip
+    d.line(cx - k, cy + k, cx - k, cy + k - size * 0.15, w, col);
+    // nib triangle at the top-right end
     d.polygon(
         &[
-            (cx + k - 1.0, cy - k - 3.0),
-            (cx + k + 3.0, cy - k + 1.0),
-            (cx + k + 2.0, cy - k - 2.0),
+            (cx + k - w * 0.5, cy - k - w * 0.8),
+            (cx + k + w * 1.1, cy - k + w * 0.6),
+            (cx + k + w * 0.4, cy - k - w * 0.4),
         ],
         col,
     );
@@ -545,8 +571,12 @@ pub fn render_preview(a: &PreviewArgs) -> Vec<u8> {
     // ================= LEFT PHONE: CHAT VIEW =================
     let mut p1 = RgbaImage::new(pw as u32, ph as u32);
     {
+        // Phone body FIRST (Python order) — then wallpaper goes ON TOP.
+        let mut d = D { img: &mut p1 };
+        d.round_rect(0.0, 0.0, pw, ph, p_radius, (phone_body_1, 255u8).into());
+    }
+    {
         // Chat wallpaper — ORIGINAL image; blurred only if user chose so.
-        // Pasted BEFORE the drawer exists (flat fill can go through `d`).
         let chat_h = ph - 116.0 * s;
         let chat_y = 60.0 * s;
         let wimg: Option<RgbaImage> = a
@@ -561,7 +591,14 @@ pub fn render_preview(a: &PreviewArgs) -> Vec<u8> {
                 cover(&src, pw as u32, chat_h as u32)
             });
         match wimg {
-            Some(wimg) => paste(&mut p1, &wimg, 0, chat_y as i64),
+            Some(wimg) => {
+                paste(&mut p1, &wimg, 0, chat_y as i64);
+                // Dim the wallpaper slightly toward bg (like Telegram's own
+                // scrim) so message bubbles and pills always have contrast,
+                // even with a bright/sunny source image.
+                let scrim = (bg, if dark { 90u8 } else { 36u8 }).into();
+                d_scrim(&mut p1, 0.0, chat_y, pw, chat_y + chat_h, scrim);
+            }
             None => {
                 let wf = a
                     .wall_flat
@@ -578,7 +615,6 @@ pub fn render_preview(a: &PreviewArgs) -> Vec<u8> {
     }
     {
         let mut d = D { img: &mut p1 };
-        d.round_rect(0.0, 0.0, pw, ph, p_radius, (phone_body_1, 255u8).into());
 
         // Status bar
         draw_status_bar(&mut d, pw as i64, text, phone_body_1, s);
@@ -631,7 +667,7 @@ pub fn render_preview(a: &PreviewArgs) -> Vec<u8> {
             a_text,
         );
 
-        // Date pill
+        // Date pill — opaque enough to read as a pill over any wallpaper
         let pill_bg = mix(bg, Rgb::new(0, 0, 0), if dark { 0.40 } else { 0.12 });
         d.round_rect(
             pw / 2.0 - 40.0 * s,
@@ -639,7 +675,7 @@ pub fn render_preview(a: &PreviewArgs) -> Vec<u8> {
             pw / 2.0 + 40.0 * s,
             116.0 * s,
             9.0 * s,
-            (pill_bg, 160u8).into(),
+            (pill_bg, 230u8).into(),
         );
         d.round_rect(
             pw / 2.0 - 25.0 * s,
@@ -647,7 +683,7 @@ pub fn render_preview(a: &PreviewArgs) -> Vec<u8> {
             pw / 2.0 + 25.0 * s,
             110.0 * s,
             3.0 * s,
-            (readable_on(pill_bg), 200u8).into(),
+            (readable_on(pill_bg), 235u8).into(),
         );
 
         // 1. Incoming message with reply block
@@ -869,10 +905,11 @@ pub fn render_preview(a: &PreviewArgs) -> Vec<u8> {
 
         // Bottom input bar (elevation is darker, never lighter)
         d.rectf(0.0, ph - 60.0 * s, pw, ph, (bg, 255u8).into());
+        // Rounded pill ends 62px short of the mic FAB so they never collide.
         d.round_rect(
             12.0 * s,
             ph - 52.0 * s,
-            pw - 62.0 * s,
+            pw - 78.0 * s,
             ph - 10.0 * s,
             21.0 * s,
             (
@@ -891,32 +928,43 @@ pub fn render_preview(a: &PreviewArgs) -> Vec<u8> {
         d.round_rect(
             56.0 * s,
             ph - 36.0 * s,
-            180.0 * s,
+            160.0 * s,
             ph - 26.0 * s,
             4.0 * s,
             (mix(text, bg, 0.4), a_text).into(),
         );
         draw_clip_icon(
             &mut d,
-            pw - 98.0 * s,
+            pw - 110.0 * s,
             ph - 46.0 * s,
             20.0 * s,
             mix(text, bg, 0.4),
             a_text,
         );
+        // Mic FAB — accent circle, centered on the bar's height, with a
+        // paper-plane glyph (Telegram's send icon) in readable_on color.
         d.ellipse(
-            pw - 52.0 * s,
+            pw - 46.0 * s,
             ph - 52.0 * s,
-            pw - 10.0 * s,
-            ph - 10.0 * s,
+            pw - 6.0 * s,
+            ph - 12.0 * s,
             (accent, a_acc).into(),
         );
-        d.ellipse(
-            pw - 36.0 * s,
-            ph - 38.0 * s,
-            pw - 26.0 * s,
-            ph - 20.0 * s,
-            (readable_on(accent), 255u8).into(),
+        let (sx, sy) = (pw - 26.0 * s, ph - 32.0 * s);
+        let send_col = C(Rgba([
+            readable_on(accent).r,
+            readable_on(accent).g,
+            readable_on(accent).b,
+            255,
+        ]));
+        // simple triangle play/send glyph
+        d.polygon(
+            &[
+                (sx - 7.0 * s, sy - 5.0 * s),
+                (sx + 7.0 * s, sy),
+                (sx - 7.0 * s, sy + 5.0 * s),
+            ],
+            send_col,
         );
     }
     round_corners(&mut p1, p_radius);
@@ -991,8 +1039,8 @@ pub fn render_preview(a: &PreviewArgs) -> Vec<u8> {
             );
 
             if i % 3 == 1 {
-                // Unread badge — dark tone bg + white digits
-                let counter_bg = mix(accent, Rgb::new(0, 0, 0), 0.42);
+                // Unread badge — bright accent fill + white digits (Telegram style)
+                let counter_bg = clamp_lightness(accent, Some(0.42), None);
                 d.ellipse(
                     pw - 40.0 * s,
                     ry + 36.0 * s,
@@ -1022,14 +1070,14 @@ pub fn render_preview(a: &PreviewArgs) -> Vec<u8> {
             d.hline(82.0 * s, pw, ry + row_h, (mix(text, bg, 0.15), 40u8).into());
         }
 
-        // FAB (pencil)
-        let fab_col = mix(accent, Rgb::new(0, 0, 0), if dark { 0.15 } else { 0.05 });
+        // FAB (pencil) — full accent color so it pops off the list
+        let fab_col = clamp_lightness(accent, Some(0.55), None);
         d.ellipse(
             pw - 76.0 * s,
             ph - 90.0 * s,
             pw - 16.0 * s,
             ph - 30.0 * s,
-            (fab_col, 245u8).into(),
+            (fab_col, 255u8).into(),
         );
         draw_pencil_icon(
             &mut d,
