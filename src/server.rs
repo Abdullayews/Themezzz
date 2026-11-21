@@ -30,16 +30,32 @@ pub async fn build_router(bot: Option<Bot>) -> Router<()> {
 
     if let Some(bot) = bot {
         // Webhook mode: mount teloxide's webhook router under /telegram.
-        let opts = WebhookOptions::new(
+        let mut opts = WebhookOptions::new(
             addr(),
             url::Url::parse(&config::webhook_url()).expect("webhook url"),
         )
-        .secret_token(config::webhook_secret())
         .drop_pending_updates();
+        // Only pass a secret when one is configured: teloxide validates
+        // it eagerly (1..=256 chars) and panics on an empty string, e.g.
+        // when WEBHOOK_SECRET is unset on Render. Without it teloxide
+        // generates a random 32-char secret per boot and registers it
+        // with Telegram on its own.
+        let secret = config::webhook_secret();
+        if !secret.is_empty() {
+            opts = opts.secret_token(secret);
+        }
         let (listener, _stop, webhook_router) =
-            teloxide::update_listeners::webhooks::axum_to_router(bot.clone(), opts)
-                .await
-                .expect("webhook setup");
+            match teloxide::update_listeners::webhooks::axum_to_router(bot.clone(), opts).await {
+                Ok(setup) => setup,
+                Err(e) => {
+                    // Webhook registration with Telegram failed (network /
+                    // API hiccup). Keep the port open and keep serving the
+                    // API + Mini App; updates fall back to long polling.
+                    tracing::error!("webhook setup failed ({e}); falling back to long polling");
+                    crate::webhook_bridge::spawn_polling(bot);
+                    return app.with_state(state);
+                }
+            };
         // Feed webhook updates into the dispatcher via a channel bridging.
         crate::webhook_bridge::spawn_bridge(listener, bot.clone());
         // with_state first → both routers are state-less, then merge works.
