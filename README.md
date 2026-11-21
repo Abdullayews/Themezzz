@@ -2,14 +2,15 @@
 
 # 🦀 Themezzz
 
-**Turn any photo into a fully customized Telegram theme — now in Rust.**
+**Turn any photo into a fully customized Telegram theme — in Rust, with a live web editor.**
 
-*Send an image → get a color palette → tweak every surface → receive a ready-to-apply `.attheme` file.*
+*Send an image → get a color palette → tweak every surface in the Mini App → receive a ready-to-apply `.attheme` file.*
 
 [![Rust](https://img.shields.io/badge/Rust-1.75+-DEA584?style=for-the-badge&logo=rust&logoColor=black)](https://www.rust-lang.org)
 [![teloxide](https://img.shields.io/badge/teloxide-0.13-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://docs.rs/teloxide)
-[![Tests](https://img.shields.io/badge/tests-7%20passing-2ea44f?style=for-the-badge)](#-testing)
+[![Tests](https://img.shields.io/badge/tests-8%20passing-2ea44f?style=for-the-badge)](#-testing)
 [![Deploy](https://img.shields.io/badge/Ready_for-Render-46E3B7?style=for-the-badge&logo=render&logoColor=white)](https://render.com)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
 </div>
 
@@ -17,34 +18,37 @@
 
 ## 💡 What is this?
 
-Themezzz is a **Telegram theme-creator bot**. Upload any picture and it
-instantly extracts a balanced 6-color palette from it, then lets you paint
-every surface of a Telegram theme with those colors — window background,
-message bubbles, bars, accents, wallpaper — with live opacity control and
-custom `#hex` support. When you're happy, it compiles everything into an
-**`.attheme` file** you can apply in Telegram with one tap.
+Themezzz is a **Telegram theme-creator bot with a web editor**. Send any
+picture and it instantly extracts a balanced 6-color palette, then opens a
+**Telegram Mini App** where you paint every surface of the theme — window
+background, message bubbles, bars, text, accents, wallpaper — with live
+previews, opacity sliders and custom `#hex` support. When you're happy, it
+compiles everything into an **`.attheme` file** that lands straight in your
+chat, ready to apply with one tap.
 
-The twist: while you tweak, the bot renders a **real-time dual-phone
-preview** (chat view + dialog list view), so you see exactly what the theme
-looks like *before* applying it — no more guess-and-retry theming.
-
-This is a full Rust rewrite of the original Python bot: one static binary,
-no runtime dependencies, ~10 MB memory footprint, faster image processing.
+The editor runs in Telegram's built-in browser, so tweaking is instant: every
+change re-renders a **real dual-phone preview** (chat view + dialog list) on
+the server and streams it back — what you see is what you get. The bot talks
+to Telegram over a **webhook** (no more slow long-polling), so buttons and
+files arrive immediately.
 
 ## ✨ Features
 
 | | |
 |---|---|
+| 🌐 **Mini App editor** | Full editor inside Telegram — upload, sliders, color pickers, live canvas preview |
 | 🎨 **Automatic palette extraction** | Median-cut quantization pulls the 6 dominant, visually balanced colors out of any picture |
 | 📱 **Real-time dual-phone previews** | Rust-rendered mockups of the Chat View **and** Dialog List View — instant feedback on every tweak |
 | 🌗 **Dark & light modes** | Background, text contrast and UI surfaces recalculated instantly per mode |
 | 🎛️ **Granular section editing** | `BG` window background · `Bar` top & status bar · `In` incoming bubbles · `Out` outgoing bubbles · `Text` primary text · `Accent` actions, avatars, tabs & FAB · `Reply` quoted text headers · `Wall` wallpaper |
-| 🫧 **Opacity sliders** | 0–100% transparency for supported surfaces |
-| 🎯 **Custom hex colors** | Type any `#hex` code (e.g. `#34c7a4`) directly in chat |
-| ⚡ **Auto mode** | One tap — the bot picks the best palette mapping for you |
-| 🖼 **Wallpaper modes** | Use your original image (blurred or not) or a flat color tone |
+| 🫧 **Transparency sliders** | 0–100% opacity for every supported surface — bubbles, bars, text, accent, reply |
+| 🖼 **Wallpaper control** | Original image (with optional blur) or a flat color — switchable any time |
+| 🎯 **Custom hex colors** | Type any `#hex` code, apply to any section |
+| ⚡ **Auto mode** | One tap — the best palette mapping is picked for you |
+| 🎲 **Dice roll** | Shuffle palette picks + alphas for instant inspiration |
+| ⚡ **Webhook-fast responses** | Updates arrive via webhook on Render; local dev falls back to polling |
 | ♿ **WCAG-aware contrast** | Text, icons and accents are always readable — no invisible UI |
-| 🚀 **24/7 hosting ready** | Built-in axum health-check server + self-ping keep-alive |
+| 🚀 **24/7 hosting ready** | One axum server: webhook + theme API + Mini App; self-ping keep-alive |
 
 ## 🖼 Preview
 
@@ -63,10 +67,10 @@ Rust port replaces each piece:
 
 | Python | Rust | Notes |
 |---|---|---|
-| `python-telegram-bot` | [`teloxide`](https://docs.rs/teloxide) 0.13 | Async Telegram bot framework on tokio |
+| `python-telegram-bot` | [`teloxide`](https://docs.rs/teloxide) 0.13 | Async Telegram bot framework, webhook mode |
 | `Pillow` quantize/blur | [`image`](https://docs.rs/image) 0.25 + custom median-cut | Palette extraction, wallpaper resize/blur |
 | `PIL` drawing | custom rasterizer on `RgbaImage` | Rounded rects, circles, arcs, polygons, soft shadows |
-| `aiohttp` server | [`axum`](https://docs.rs/axum) 0.7 | `/` health check for Render |
+| `aiohttp` server | [`axum`](https://docs.rs/axum) 0.7 | webhook + `/api/*` theme API + `/app` Mini App |
 | `aiohttp` self-ping | [`reqwest`](https://docs.rs/reqwest) 0.12 | 9-min keep-alive loop |
 | `requirements.txt` | `Cargo.toml` + `Cargo.lock` | Locked, reproducible builds |
 
@@ -77,17 +81,47 @@ rendering, and zero interpreter restarts on free hosting tiers.
 
 ```
 src/
-├── main.rs        # entrypoint: config → server → keep-alive → polling
-├── lib.rs         # library root (colors, preview, state)
-├── config.rs      # BOT_TOKEN via dotenvy + env
-├── colors.rs      # WCAG math, HLS, palette extraction, .attheme builder
-├── preview.rs     # dual-phone Telegram UI renderer
-├── state.rs       # sections, labels, per-chat editor state
-├── bot.rs         # teloxide handlers + inline keyboard UI
-└── server.rs      # axum health check + reqwest keep-alive
+├── main.rs            # thin binary wrapper
+├── lib.rs             # run_bot(): webhook mode (Render) or polling (local)
+├── config.rs          # BOT_TOKEN, PORT, RENDER_EXTERNAL_URL, WEBHOOK_SECRET
+├── colors.rs          # WCAG math, HLS, palette extraction, .attheme builder
+├── preview.rs         # dual-phone Telegram UI renderer (also live previews)
+├── state.rs           # sections, labels, editor state
+├── store.rs           # theme store: build + cache finished themes by id
+├── bot.rs             # teloxide handlers: /start, images, web_app_data
+├── webhook_bridge.rs  # feeds webhook updates into the dispatcher
+└── server.rs          # axum: /app, /api/palette, /api/state, /api/theme/:id/*
+web/app.html           # the Mini App (single self-contained page)
 ```
 
-### Color pipeline
+### HTTP API
+
+| endpoint | what it does |
+|---|---|
+| `GET /` | health check (Render port binding) |
+| `GET /app` | the Mini App HTML (Telegram WebApp SDK included) |
+| `POST /api/palette` | body: raw image bytes → `{ palette: [#hex ×6], wallpaper: <b64 png> }` |
+| `POST /api/state` | body: full editor state JSON → `{ id, preview, thumb, file, filename, … }` |
+| `GET /api/theme/:id/preview.png` | 1000×1000 dual-phone preview |
+| `GET /api/theme/:id/thumb.png` | small chat-bubble thumbnail |
+| `GET /api/theme/:id/file.attheme` | the compiled theme file |
+
+Themes are kept in memory for 2 h (or 200 entries), then expire.
+
+### The flow
+
+1. **`/start`** → the bot answers with an **Open Theme Editor** button.
+2. The Mini App opens: **pick an image** (or start from a stock palette).
+   The server extracts the palette and the wallpaper.
+3. **Tweak everything live** — mode, sections, palette picks, custom hex,
+   transparency sliders, wallpaper image/flat/blur. Every change rebuilds
+   the preview server-side and streams it back to the app.
+4. **Create theme** → `sendData()` hands the theme id to the bot; the bot
+   replies in chat with the **preview picture + the `.attheme` file**.
+5. Sending an image directly in chat still works: the bot grabs the colors
+   and links straight to the editor.
+
+## 📖 Color pipeline
 
 1. **Extract** — the image is thumbnailed to 256 px and median-cut
    quantized to 24 boxes; the most populated boxes that pass a luminance
@@ -105,23 +139,6 @@ src/
    as `key=argb_int` lines, with an optional wallpaper appended after
    the `WPS` marker.
 
-### Preview renderer
-
-A pure-Rust rasterizer draws the 1000×1000 preview at 2× supersampling:
-status bar with signal/wifi/battery glyphs, action bars, date pill,
-reply-quote bubbles, voice-note waveform, avatars, unread counters,
-FAB, and a Gaussian-blurred drop shadow behind each phone. Wallpaper is
-cover-cropped from the original image; everything is clipped to the
-phone's rounded frame and Lanczos-downscaled at the end.
-
-## 📖 How it works — the 5-step flow
-
-1. **Send an image** — any photo goes in.
-2. **Choose a mode** — Dark 🌙 or Light ☀️.
-3. **Pick a section** — `BG`, `Bar`, `In`, `Out`, `Text`, `Accent`, `Reply` or `Wall`.
-4. **Apply a color** — palette number 1–6, ⚡ Auto, a custom `#hex`, or a 🫧 transparency tweak.
-5. **Create the theme** — ✅ and the compiled `.attheme` file lands in your chat, ready to apply.
-
 ## 🚀 Getting started
 
 ```bash
@@ -132,7 +149,7 @@ cd Themezzz
 # 2. configure
 cp .env.example .env        # then put your bot token into .env
 
-# 3. build & run
+# 3. build & run (polling mode locally, API on :8080)
 cargo run --release
 ```
 
@@ -143,8 +160,11 @@ Get a bot token from [@BotFather](https://t.me/BotFather).
 | var | required | meaning |
 |---|---|---|
 | `BOT_TOKEN` | ✅ | Telegram bot token from @BotFather |
-| `PORT` | — | health-check server port (default 8080, Render sets it) |
-| `RENDER_EXTERNAL_URL` | — | enables the self-ping keep-alive on Render |
+| `PORT` | — | server port (default 8080; Render sets it) |
+| `RENDER_EXTERNAL_URL` | — | set by Render: switches to webhook mode + keep-alive |
+| `RENDER` | — | set by Render; together with the URL above enables webhooks |
+| `WEBAPP_URL` | — | local override for the Mini App URL shown on buttons |
+| `WEBHOOK_SECRET` | — | optional shared secret for the `/telegram` webhook route |
 | `RUST_LOG` | — | log filter (default `info`) |
 
 ## ☁️ Deploy on Render
@@ -155,31 +175,29 @@ The repo ships a `render.yaml` blueprint:
 2. In Render: **New → Blueprint**, pick this repo.
 3. Set the `BOT_TOKEN` env var when prompted.
 4. Done — the service builds with `cargo build --release --locked`,
-   starts `./target/release/themezzz`, and pings itself every 9 minutes
-   so the free tier never sleeps.
+   starts `cargo run --release` (via `default-run`), binds `PORT`, and
+   registers the webhook automatically. The Mini App is served at
+   `https://<service>.onrender.com/app`.
 
 ## 🧪 Testing
 
 ```bash
-cargo test                        # 7 unit tests: color math, palette, theme
-                                  # resolution, attheme serialization,
-                                  # wallpaper embedding
-cargo run --bin render_preview    # regenerate assets/preview_*.png
-cargo run --bin make_theme        # offline .attheme smoke test (stdout
-                                  # or: -- out.attheme writes the file)
+cargo test                        # 7 unit tests + 1 end-to-end API test:
+                                   # palette → state → preview/thumb/file
+cargo run --bin render_preview     # regenerate assets/preview_*.png
+cargo run --bin make_theme         # offline .attheme smoke test
 ```
 
-`render_preview` doubles as the visual regression tool — run it after
-touching `preview.rs` and eyeball the two PNGs. `make_theme` replaces the
-old Python `smoke_test.py`: it resolves a built-in palette and dumps a
-517-key `.attheme` without touching Telegram.
+The integration test spins up the real axum router in-process and walks the
+whole chain: generated image → `/api/palette` → `/api/state` → PNG/ATtheme
+fetches → 404 handling.
 
 ## 🗺 Roadmap
 
 - [ ] Inline theme gallery (top community themes)
-- [ ] Direct `.attheme` preview inside the chat preview
 - [ ] Multi-image palette blending
+- [ ] Direct .attheme preview inside Telegram's own theme player
 
 ## 📄 License
 
-MIT — do whatever, credit appreciated.
+MIT — see [LICENSE](LICENSE). Do whatever, credit appreciated.
