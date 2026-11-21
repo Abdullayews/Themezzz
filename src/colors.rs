@@ -101,11 +101,12 @@ pub fn luminance(c: Rgb) -> f64 {
     0.2126 * srgb_to_lin(c.r) + 0.7152 * srgb_to_lin(c.g) + 0.0722 * srgb_to_lin(c.b)
 }
 
-/// `weight = 1.0` → c1, `weight = 0.0` → c2.
+/// `weight = 0.0` → c1, `weight = 1.0` → c2 (fraction of the blend taken
+/// from c2 — matches the Python original's `mix(a, b, t)`).
 pub fn mix(c1: Rgb, c2: Rgb, weight: f64) -> Rgb {
     let w = weight.clamp(0.0, 1.0);
     let ch = |a: u8, b: u8| {
-        ((f64::from(a) * w + f64::from(b) * (1.0 - w)).round() as i32).clamp(0, 255) as u8
+        ((f64::from(a) * (1.0 - w) + f64::from(b) * w).round() as i32).clamp(0, 255) as u8
     };
     Rgb::new(ch(c1.r, c2.r), ch(c1.g, c2.g), ch(c1.b, c2.b))
 }
@@ -1690,8 +1691,9 @@ mod tests {
     fn mix_weights() {
         let a = Rgb::new(255, 0, 0);
         let b = Rgb::new(0, 0, 255);
-        assert_eq!(mix(a, b, 1.0), a);
-        assert_eq!(mix(a, b, 0.0), b);
+        // weight = fraction of the blend taken from c2 (Python `mix(a, b, t)`)
+        assert_eq!(mix(a, b, 0.0), a);
+        assert_eq!(mix(a, b, 1.0), b);
         assert_eq!(mix(a, b, 0.5), Rgb::new(128, 0, 128));
     }
 

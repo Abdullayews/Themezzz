@@ -156,6 +156,47 @@ impl<'a> D<'a> {
         self.corner(x1 - radius, y1 - radius, radius, col);
     }
 
+    /// Rounded-rect outline (used for the subtle bubble edge against
+    /// bright wallpaper elements). Strokes the frame with width w.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn round_rect_stroke(
+        &mut self,
+        x0: f64,
+        y0: f64,
+        x1: f64,
+        y1: f64,
+        radius: f64,
+        w: f64,
+        col: C,
+    ) {
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let radius = radius.min((x1 - x0) / 2.0).min((y1 - y0) / 2.0).max(0.0);
+        // edges
+        self.rectf(x0, y0 + radius, x0 + w, y1 - radius, col);
+        self.rectf(x1 - w, y0 + radius, x1, y1 - radius, col);
+        self.rectf(x0 + radius, y0, x1 - radius, y0 + w, col);
+        self.rectf(x0 + radius, y1 - w, x1 - radius, y1, col);
+        // corner arcs: ring band between radius-w and radius
+        for (cx, cy) in [
+            (x1 - radius, y0 + radius),
+            (x0 + radius, y0 + radius),
+            (x0 + radius, y1 - radius),
+            (x1 - radius, y1 - radius),
+        ] {
+            for y in (cy - radius).floor() as i64..(cy + radius).ceil() as i64 {
+                for x in (cx - radius).floor() as i64..(cx + radius).ceil() as i64 {
+                    let (dx, dy) = (x as f64 + 0.5 - cx, y as f64 + 0.5 - cy);
+                    let dist = (dx * dx + dy * dy).sqrt();
+                    if dist <= radius && dist >= radius - w && dx >= -0.5 && dy >= -0.5 {
+                        self.px(x, y, col);
+                    }
+                }
+            }
+        }
+    }
+
     /// Quarter-circle fill for rounded corners (dx≥0 half).
     pub(crate) fn corner(&mut self, cx: f64, cy: f64, r: f64, col: C) {
         for y in (cy - r).floor() as i64..(cy + r).ceil() as i64 {
@@ -687,6 +728,9 @@ pub fn render_preview(a: &PreviewArgs) -> Vec<u8> {
         );
 
         // 1. Incoming message with reply block
+        // Subtle edge so bubbles read cleanly over bright wallpaper spots
+        // (moon/sun) — Telegram outlines translucent bubbles similarly.
+        let in_edge = (mix(inb, text, 0.22), 110u8).into();
         d.round_rect(
             16.0 * s,
             130.0 * s,
@@ -694,6 +738,15 @@ pub fn render_preview(a: &PreviewArgs) -> Vec<u8> {
             185.0 * s,
             14.0 * s,
             (inb, a_in).into(),
+        );
+        d.round_rect_stroke(
+            16.0 * s,
+            130.0 * s,
+            250.0 * s,
+            185.0 * s,
+            14.0 * s,
+            s,
+            in_edge,
         );
         d.round_rect(
             26.0 * s,
@@ -744,6 +797,7 @@ pub fn render_preview(a: &PreviewArgs) -> Vec<u8> {
         );
 
         // 2. Outgoing text message
+        let out_edge = (mix(outb, text, 0.22), 110u8).into();
         d.round_rect(
             140.0 * s,
             200.0 * s,
@@ -751,6 +805,15 @@ pub fn render_preview(a: &PreviewArgs) -> Vec<u8> {
             248.0 * s,
             14.0 * s,
             (outb, a_out).into(),
+        );
+        d.round_rect_stroke(
+            140.0 * s,
+            200.0 * s,
+            394.0 * s,
+            248.0 * s,
+            14.0 * s,
+            s,
+            out_edge,
         );
         d.round_rect(
             154.0 * s,
@@ -786,6 +849,15 @@ pub fn render_preview(a: &PreviewArgs) -> Vec<u8> {
             18.0 * s,
             (outb, a_out).into(),
         );
+        d.round_rect_stroke(
+            110.0 * s,
+            265.0 * s,
+            394.0 * s,
+            335.0 * s,
+            18.0 * s,
+            s,
+            out_edge,
+        );
         d.ellipse(
             124.0 * s,
             277.0 * s,
@@ -816,7 +888,7 @@ pub fn render_preview(a: &PreviewArgs) -> Vec<u8> {
                 180.0 * s + i as f64 * 13.0 * s + 5.0 * s,
                 296.0 * s + hv * s / 2.0,
                 2.0 * s,
-                (col2, a_text).into(),
+                (col2, (a_text.max(220) as u32).min(255) as u8).into(),
             );
         }
         d.round_rect(
@@ -825,7 +897,11 @@ pub fn render_preview(a: &PreviewArgs) -> Vec<u8> {
             225.0 * s,
             323.0 * s,
             3.0 * s,
-            (mix(text, outb, 0.4), a_text).into(),
+            (
+                mix(text, outb, 0.4),
+                (a_text.max(200) as u32).min(255) as u8,
+            )
+                .into(),
         );
         draw_checkmarks(
             &mut d,
@@ -851,6 +927,15 @@ pub fn render_preview(a: &PreviewArgs) -> Vec<u8> {
             405.0 * s,
             14.0 * s,
             (inb, a_in).into(),
+        );
+        d.round_rect_stroke(
+            54.0 * s,
+            350.0 * s,
+            280.0 * s,
+            405.0 * s,
+            14.0 * s,
+            s,
+            in_edge,
         );
         d.round_rect(
             66.0 * s,
@@ -885,6 +970,15 @@ pub fn render_preview(a: &PreviewArgs) -> Vec<u8> {
             460.0 * s,
             14.0 * s,
             (outb, a_out).into(),
+        );
+        d.round_rect_stroke(
+            210.0 * s,
+            420.0 * s,
+            394.0 * s,
+            460.0 * s,
+            14.0 * s,
+            s,
+            out_edge,
         );
         d.round_rect(
             224.0 * s,
@@ -923,7 +1017,7 @@ pub fn render_preview(a: &PreviewArgs) -> Vec<u8> {
             ph - 32.0 * s,
             10.0 * s,
             s,
-            (mix(text, bg, 0.4), a_text).into(),
+            (mix(text, bg, 0.4), (a_text.max(200) as u32).min(255) as u8).into(),
         );
         d.round_rect(
             56.0 * s,
@@ -931,7 +1025,7 @@ pub fn render_preview(a: &PreviewArgs) -> Vec<u8> {
             160.0 * s,
             ph - 26.0 * s,
             4.0 * s,
-            (mix(text, bg, 0.4), a_text).into(),
+            (mix(text, bg, 0.4), (a_text.max(200) as u32).min(255) as u8).into(),
         );
         draw_clip_icon(
             &mut d,
@@ -939,7 +1033,7 @@ pub fn render_preview(a: &PreviewArgs) -> Vec<u8> {
             ph - 46.0 * s,
             20.0 * s,
             mix(text, bg, 0.4),
-            a_text,
+            (a_text.max(200) as u32).min(255) as u8,
         );
         // Mic FAB — accent circle, centered on the bar's height, with a
         // paper-plane glyph (Telegram's send icon) in readable_on color.
@@ -1029,18 +1123,19 @@ pub fn render_preview(a: &PreviewArgs) -> Vec<u8> {
                 4.0 * s,
                 (mix(text, bg, 0.45), a_text).into(),
             );
+            // Timestamp — always visible (not tied to text alpha), secondary tone
             d.round_rect(
                 pw - 58.0 * s,
                 ry + 18.0 * s,
                 pw - 18.0 * s,
                 ry + 26.0 * s,
                 3.0 * s,
-                (mix(text, bg, 0.5), a_text).into(),
+                (mix(text, bg, 0.4), (a_text.max(200) as u32).min(255) as u8).into(),
             );
 
             if i % 3 == 1 {
                 // Unread badge — bright accent fill + white digits (Telegram style)
-                let counter_bg = clamp_lightness(accent, Some(0.42), None);
+                let counter_bg = clamp_lightness(accent, Some(0.55), None);
                 d.ellipse(
                     pw - 40.0 * s,
                     ry + 36.0 * s,
