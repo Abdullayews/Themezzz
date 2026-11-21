@@ -24,7 +24,7 @@ fn a_of(alphas: &BTreeMap<String, u32>, k: &str) -> u8 {
 }
 
 #[derive(Clone, Copy)]
-struct C(Rgba<u8>);
+pub(crate) struct C(Rgba<u8>);
 
 impl From<(Rgb, u8)> for C {
     fn from((c, a): (Rgb, u8)) -> Self {
@@ -35,12 +35,12 @@ impl From<(Rgb, u8)> for C {
 // ---------- Vector drawing helpers (all sizes S-scaled) ----------
 
 /// Overwrite mode draw: like PIL fill (source-over without blending).
-struct D<'a> {
-    img: &'a mut RgbaImage,
+pub(crate) struct D<'a> {
+    pub(crate) img: &'a mut RgbaImage,
 }
 
 impl<'a> D<'a> {
-    fn px(&mut self, x: i64, y: i64, col: C) {
+    pub(crate) fn px(&mut self, x: i64, y: i64, col: C) {
         if x < 0 || y < 0 {
             return;
         }
@@ -50,7 +50,7 @@ impl<'a> D<'a> {
     }
 
     /// Filled rectangle in integer coordinates (PIL rectangle).
-    fn rect(&mut self, x0: i64, y0: i64, x1: i64, y1: i64, col: C) {
+    pub(crate) fn rect(&mut self, x0: i64, y0: i64, x1: i64, y1: i64, col: C) {
         if x1 < x0 || y1 < y0 {
             return;
         }
@@ -62,7 +62,7 @@ impl<'a> D<'a> {
     }
 
     /// Filled rectangle with float coords → inclusive int box (PIL semantics).
-    fn rectf(&mut self, x0: f64, y0: f64, x1: f64, y1: f64, col: C) {
+    pub(crate) fn rectf(&mut self, x0: f64, y0: f64, x1: f64, y1: f64, col: C) {
         self.rect(
             x0.ceil() as i64,
             y0.ceil() as i64,
@@ -73,7 +73,7 @@ impl<'a> D<'a> {
     }
 
     /// Filled ellipse from a bounding box (PIL ellipse).
-    fn ellipse(&mut self, x0: f64, y0: f64, x1: f64, y1: f64, col: C) {
+    pub(crate) fn ellipse(&mut self, x0: f64, y0: f64, x1: f64, y1: f64, col: C) {
         if x1 <= x0 || y1 <= y0 {
             return;
         }
@@ -92,7 +92,7 @@ impl<'a> D<'a> {
     }
 
     /// Thick line with rounded caps (approximates PIL line with width).
-    fn line(&mut self, x0: f64, y0: f64, x1: f64, y1: f64, w: f64, col: C) {
+    pub(crate) fn line(&mut self, x0: f64, y0: f64, x1: f64, y1: f64, w: f64, col: C) {
         let r = (w / 2.0).max(0.5);
         for y in (y0 - r).floor() as i64..(y1 + r).ceil() as i64 + 1 {
             for x in (x0 - r).floor() as i64..(x1 + r).ceil() as i64 + 1 {
@@ -115,7 +115,7 @@ impl<'a> D<'a> {
     }
 
     /// Filled circle with radius r at (cx, cy).
-    fn circle(&mut self, cx: f64, cy: f64, r: f64, col: C) {
+    pub(crate) fn circle(&mut self, cx: f64, cy: f64, r: f64, col: C) {
         for y in (cy - r).floor() as i64..(cy + r).ceil() as i64 {
             for x in (cx - r).floor() as i64..(cx + r).ceil() as i64 {
                 let (dx, dy) = (x as f64 + 0.5 - cx, y as f64 + 0.5 - cy);
@@ -127,7 +127,7 @@ impl<'a> D<'a> {
     }
 
     /// Circle outline with stroke width (PIL ellipse outline).
-    fn circle_outline(&mut self, cx: f64, cy: f64, r: f64, w: f64, col: C) {
+    pub(crate) fn circle_outline(&mut self, cx: f64, cy: f64, r: f64, w: f64, col: C) {
         for y in (cy - r - w).floor() as i64..(cy + r + w).ceil() as i64 {
             for x in (cx - r - w).floor() as i64..(cx + r + w).ceil() as i64 {
                 let (dx, dy) = (x as f64 + 0.5 - cx, y as f64 + 0.5 - cy);
@@ -140,7 +140,7 @@ impl<'a> D<'a> {
     }
 
     /// Filled rounded rectangle (PIL rounded_rectangle).
-    fn round_rect(&mut self, x0: f64, y0: f64, x1: f64, y1: f64, radius: f64, col: C) {
+    pub(crate) fn round_rect(&mut self, x0: f64, y0: f64, x1: f64, y1: f64, radius: f64, col: C) {
         if x1 <= x0 || y1 <= y0 {
             return;
         }
@@ -157,7 +157,7 @@ impl<'a> D<'a> {
     }
 
     /// Quarter-circle fill for rounded corners (dx≥0 half).
-    fn corner(&mut self, cx: f64, cy: f64, r: f64, col: C) {
+    pub(crate) fn corner(&mut self, cx: f64, cy: f64, r: f64, col: C) {
         for y in (cy - r).floor() as i64..(cy + r).ceil() as i64 {
             for x in (cx - r).floor() as i64..(cx + r).ceil() as i64 {
                 let (dx, dy) = (x as f64 + 0.5 - cx, y as f64 + 0.5 - cy);
@@ -169,7 +169,7 @@ impl<'a> D<'a> {
     }
 
     /// Polygon fill via point-in-polygon test (PIL polygon).
-    fn polygon(&mut self, pts: &[(f64, f64)], col: C) {
+    pub(crate) fn polygon(&mut self, pts: &[(f64, f64)], col: C) {
         let minx = pts.iter().fold(f64::MAX, |a, p| a.min(p.0)).floor() as i64;
         let maxx = pts.iter().fold(f64::MIN, |a, p| a.max(p.0)).ceil() as i64;
         let miny = pts.iter().fold(f64::MAX, |a, p| a.min(p.1)).floor() as i64;
@@ -196,7 +196,7 @@ impl<'a> D<'a> {
     }
 
     /// Thin horizontal line (PIL line with width=1 semantics).
-    fn hline(&mut self, x0: f64, x1: f64, y: f64, col: C) {
+    pub(crate) fn hline(&mut self, x0: f64, x1: f64, y: f64, col: C) {
         let yy = y.round() as i64;
         for x in x0.ceil() as i64..=x1.floor() as i64 {
             self.px(x, yy, col);
@@ -206,6 +206,11 @@ impl<'a> D<'a> {
 
 /// Alpha-blend source-over composite (PIL paste with mask).
 fn paste(img: &mut RgbaImage, src: &RgbaImage, dx: i64, dy: i64) {
+    paste_rgba(img, src, dx, dy)
+}
+
+/// Public alias used by the thumbnail renderer.
+pub(crate) fn paste_rgba(img: &mut RgbaImage, src: &RgbaImage, dx: i64, dy: i64) {
     for (_sy, row) in src.enumerate_rows() {
         for (x, y, p) in row {
             let (tx, ty) = (dx + x as i64, dy + y as i64);
@@ -231,6 +236,11 @@ fn paste(img: &mut RgbaImage, src: &RgbaImage, dx: i64, dy: i64) {
 
 /// Center-crop image to fully cover w×h maintaining aspect ratio.
 fn cover(img: &DynamicImage, w: u32, h: u32) -> RgbaImage {
+    cover_rgba(img, w, h)
+}
+
+/// Public alias used by the thumbnail renderer.
+pub(crate) fn cover_rgba(img: &DynamicImage, w: u32, h: u32) -> RgbaImage {
     let (iw, ih) = img.dimensions();
     let scale = (f64::from(w) / f64::from(iw).max(1.0)).max(f64::from(h) / f64::from(ih).max(1.0));
     let (nw, nh) = (
@@ -248,6 +258,11 @@ fn cover(img: &DynamicImage, w: u32, h: u32) -> RgbaImage {
         h.min(nh),
     )
     .to_image()
+}
+
+/// Public alias of the internal Gaussian blur for thumbnails.
+pub(crate) fn blur_rgba(img: &RgbaImage, radius: f64) -> RgbaImage {
+    gaussian_blur_rgba(img, radius)
 }
 
 /// Gaussian blur on RGBA (std dev = radius).
