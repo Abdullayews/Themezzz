@@ -182,6 +182,15 @@ input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border-radius: 
 
   <!-- Editor -->
   <div id="editor" class="hidden">
+    <!-- Paired tabs (only shown in paired mode) -->
+    <section class="card" id="tabs" style="padding:8px 14px">
+      <div class="seg">
+        <button id="tab-mine" data-tab="mine">💜 My half</button>
+        <button id="tab-theirs" data-tab="theirs">💙 Their half</button>
+      </div>
+      <div id="tab-hint" style="text-align:center; font-size:11px; color:var(--muted); padding-top:8px">your half</div>
+    </section>
+
     <section class="card" id="preview-wrap">
       <img id="preview" alt="Theme preview">
       <div id="pv-cap">live preview</div>
@@ -286,6 +295,39 @@ const S = {
   previewToken: 0,
 };
 
+/* ============ Paired mode (two matching themes) ============ */
+// Opened from the chat menu's "👥 Paired" button (?mode=paired): the user
+// designs their own half first, then the partner half — same controls,
+// two tabs.
+const PAIRED = new URLSearchParams(location.search).get('mode') === 'paired';
+// Their half starts as a mirrored copy of mine: outgoing↔incoming and
+// light↔dark swapped, so the pair feels designed together.
+let editingMine = true;    // which tab is active
+const P = {
+  mode: 'light',
+  sections: {},
+  active: 'bg',
+  wallMode: 'flat', wallIdx: -1, wallCustom: null, wallBlur: false,
+  wallB64: '',
+};
+P.sections = defSections();
+
+function mirrorSections(src) {
+  const out = {};
+  for (const [k, v] of Object.entries(src)) out[k] = { ...v };
+  // swap in/out so "their" bubbles mirror mine
+  const t = out.in; out.in = out.out; out.out = t;
+  return out;
+}
+function mirrorInit() {
+  P.mode = S.mode === 'dark' ? 'light' : 'dark';
+  P.sections = mirrorSections(S.sections);
+  P.wallMode = S.wallMode; P.wallIdx = S.wallIdx; P.wallCustom = S.wallCustom;
+  P.wallBlur = S.wallBlur; P.wallB64 = S.wallB64;
+}
+// Which state object is currently being edited.
+const cur = () => editingMine ? S : P;
+
 function defSections() {
   const o = {};
   for (const k of ['bg','bar','in','out','text','accent','reply'])
@@ -320,7 +362,7 @@ function schedulePreview() {
 async function renderPreview() {
   const token = ++S.previewToken;
   try {
-    const r = await api('/api/state', netState());
+    const r = await api('/api/state', netState(cur()));
     if (token !== S.previewToken) return;   // superseded
     $('#preview').src = r.preview + '?t=' + Date.now();
     $('#preview').onload = () => $('#pv-spin').classList.remove('on');
@@ -330,16 +372,16 @@ async function renderPreview() {
   }
 }
 
-function netState() {
+function netState(st) {
   const sections = {};
-  for (const [k, v] of Object.entries(S.sections))
+  for (const [k, v] of Object.entries(st.sections))
     sections[k] = {idx: v.idx, alpha: v.alpha, custom: v.custom};
   return {
-    palette: S.palette, mode: S.mode, sections, active: S.active,
-    wall_mode: S.wallMode, wall_idx: S.wallIdx,
-    wall_custom: S.wallCustom ? hex(S.wallCustom) : null,
-    wall_blur: S.wallBlur,
-    wall_b64: S.wallMode === 'image' && S.wallB64 ? S.wallB64 : null,
+    palette: S.palette, mode: st.mode, sections, active: st.active,
+    wall_mode: st.wallMode, wall_idx: st.wallIdx,
+    wall_custom: st.wallCustom ? hex(st.wallCustom) : null,
+    wall_blur: st.wallBlur,
+    wall_b64: st.wallMode === 'image' && st.wallB64 ? st.wallB64 : null,
   };
 }
 function hex(rgb) {
@@ -347,21 +389,21 @@ function hex(rgb) {
   return '#' + h(rgb[0]) + h(rgb[1]) + h(rgb[2]);
 }
 
-/* ============ Mode switch ============ */
+/* ============ Mode switch (works on the state being edited) ============ */
 $$('#mode-seg button').forEach(b => b.onclick = () => {
-  S.mode = b.dataset.mode;
+  cur().mode = b.dataset.mode;
   $$('#mode-seg button').forEach(x => x.classList.toggle('on', x === b));
   schedulePreview();
 });
 
 /* ============ Section chips ============ */
-function activeColor(k) {
+function activeColor(st, k) {
   if (k === 'wall') {
-    if (S.wallCustom) return S.wallCustom;
-    if (S.wallIdx >= 0 && S.palette[S.wallIdx]) return parseHex(S.palette[S.wallIdx]);
+    if (st.wallCustom) return st.wallCustom;
+    if (st.wallIdx >= 0 && S.palette[st.wallIdx]) return parseHex(S.palette[st.wallIdx]);
     return null;
   }
-  const sec = S.sections[k];
+  const sec = st.sections[k];
   if (!sec) return null;
   if (sec.custom) return sec.custom;
   if (sec.idx >= 0 && S.palette[sec.idx]) return parseHex(S.palette[sec.idx]);
@@ -376,82 +418,85 @@ function parseHex(s) {
 }
 
 function buildSectionChips() {
+  const st = cur();
   const box = $('#sections'); box.innerHTML = '';
   for (const s of SECS) {
     const el = document.createElement('button');
-    el.className = 'chip' + (S.active === s.k ? ' on' : '');
-    const c = s.k === 'wall' ? wallChipColor() : activeColor(s.k);
+    el.className = 'chip' + (st.active === s.k ? ' on' : '');
+    const c = s.k === 'wall' ? wallChipColor(st) : activeColor(st, s.k);
     const sw = document.createElement('span');
     sw.className = 'sw';
     if (c) sw.style.background = `rgb(${c[0]},${c[1]},${c[2]})`;
     else sw.style.background = 'conic-gradient(#f66 0 25%, #fc6 0 50%, #6f8 0 75%, #6cf 0)';
     el.append(sw, document.createTextNode(s.icon + ' ' + s.label));
-    el.onclick = () => { S.active = s.k; buildSectionChips(); buildSwatches(); syncAlphaUI(); };
+    el.onclick = () => { st.active = s.k; buildSectionChips(); buildSwatches(); syncAlphaUI(); };
     box.append(el);
   }
 }
-function wallChipColor() {
-  if (S.wallMode === 'image') return null;
-  if (S.wallCustom) return S.wallCustom;
-  if (S.wallIdx >= 0 && S.palette[S.wallIdx]) return parseHex(S.palette[S.wallIdx]);
+function wallChipColor(st) {
+  if (st.wallMode === 'image') return null;
+  if (st.wallCustom) return st.wallCustom;
+  if (st.wallIdx >= 0 && S.palette[st.wallIdx]) return parseHex(S.palette[st.wallIdx]);
   return null;
 }
 
 /* ============ Swatches ============ */
 function buildSwatches() {
+  const st = cur();
   const box = $('#swatches'); box.innerHTML = '';
-  const isWall = S.active === 'wall';
-  const cur = isWall
-    ? {idx: S.wallIdx, custom: S.wallCustom}
-    : {idx: S.sections[S.active].idx, custom: S.sections[S.active].custom};
+  const isWall = st.active === 'wall';
+  const sel = isWall
+    ? {idx: st.wallIdx, custom: st.wallCustom}
+    : {idx: st.sections[st.active].idx, custom: st.sections[st.active].custom};
 
   const auto = document.createElement('button');
   auto.className = 'swatch auto';
   auto.textContent = '⚡';
   auto.title = 'Auto — derived from the image';
-  const on = cur.idx === -1 && !cur.custom;
+  const on = sel.idx === -1 && !sel.custom;
   if (on) auto.classList.add('on');
   auto.onclick = () => {
-    if (isWall) { S.wallIdx = -1; S.wallCustom = null; if (S.wallMode==='flat'){} else S.wallMode='flat'; }
-    else { S.sections[S.active].idx = -1; S.sections[S.active].custom = null; }
+    if (isWall) { st.wallIdx = -1; st.wallCustom = null; }
+    else { st.sections[st.active].idx = -1; st.sections[st.active].custom = null; }
     buildSectionChips(); buildSwatches(); schedulePreview();
   };
   box.append(auto);
 
   S.palette.forEach((p, i) => {
     const el = document.createElement('button');
-    el.className = 'swatch' + (cur.idx === i && !cur.custom ? ' on' : '');
+    el.className = 'swatch' + (sel.idx === i && !sel.custom ? ' on' : '');
     el.style.background = p;
     el.title = p;
     el.onclick = () => {
-      if (isWall) { S.wallIdx = i; S.wallCustom = null; }
-      else { S.sections[S.active].idx = i; S.sections[S.active].custom = null; }
+      if (isWall) { st.wallIdx = i; st.wallCustom = null; }
+      else { st.sections[st.active].idx = i; st.sections[st.active].custom = null; }
       buildSectionChips(); buildSwatches(); schedulePreview();
     };
     box.append(el);
   });
 
-  const hexIn = $('#hex-in');
-  hexIn.value = cur.custom ? hex(cur.custom) : '';
+  $('#hex-in').value = sel.custom ? hex(sel.custom) : '';
 }
 
 /* hex input */
 $('#hex-apply').onclick = applyHex;
 $('#hex-in').addEventListener('keydown', e => { if (e.key === 'Enter') applyHex(); });
 function applyHex() {
+  const st = cur();
   const c = parseHex($('#hex-in').value);
   if (!c) { toast('Bad hex — try #34c7a4'); return; }
-  if (S.active === 'wall') { S.wallMode = 'flat'; S.wallCustom = c; S.wallIdx = -1; syncWpUI(); }
-  else { S.sections[S.active].custom = c; S.sections[S.active].idx = -1; }
+  if (st.active === 'wall') { st.wallMode = 'flat'; st.wallCustom = c; st.wallIdx = -1; syncWpUI(); }
+  else { st.sections[st.active].custom = c; st.sections[st.active].idx = -1; }
   buildSectionChips(); buildSwatches(); schedulePreview();
 }
 
 /* ============ Alpha slider ============ */
 function syncAlphaUI() {
-  const isAlpha = ALPHA_SECS.includes(S.active);
+  const st = cur();
+  const isAlpha = ALPHA_SECS.includes(st.active);
   $('#alpha-block').style.display = isAlpha ? 'block' : 'none';
   if (!isAlpha) return;
-  const a = S.sections[S.active].alpha;
+  const a = st.sections[st.active].alpha;
   $('#alpha').value = a;
   $('#alpha-val').textContent = a + '%';
   paintRange();
@@ -461,13 +506,15 @@ function paintRange() {
   r.style.setProperty('--val', r.value + '%');
 }
 $('#alpha').addEventListener('input', () => {
-  S.sections[S.active].alpha = +$('#alpha').value;
+  const st = cur();
+  st.sections[st.active].alpha = +$('#alpha').value;
   $('#alpha-val').textContent = $('#alpha').value + '%';
   paintRange(); schedulePreview();
 });
 $('#alpha').addEventListener('change', schedulePreview);
 $$('#alpha-block .chip').forEach(b => b.onclick = () => {
-  S.sections[S.active].alpha = +b.dataset.a;
+  const st = cur();
+  st.sections[st.active].alpha = +b.dataset.a;
   $('#alpha').value = b.dataset.a;
   $('#alpha-val').textContent = b.dataset.a + '%';
   paintRange(); schedulePreview();
@@ -475,44 +522,50 @@ $$('#alpha-block .chip').forEach(b => b.onclick = () => {
 
 /* ============ Wallpaper ============ */
 $$('#wp-seg button').forEach(b => b.onclick = () => {
-  S.wallMode = b.dataset.wp;
-  if (S.wallMode === 'image' && !S.wallB64) { toast('Pick an image first'); }
+  const st = cur();
+  st.wallMode = b.dataset.wp;
+  if (st.wallMode === 'image' && !st.wallB64) { toast('Pick an image first'); }
   syncWpUI(); schedulePreview();
 });
 function syncWpUI() {
-  $$('#wp-seg button').forEach(x => x.classList.toggle('on', x.dataset.wp === S.wallMode));
-  $('#wp-image-ui').classList.toggle('hidden', S.wallMode !== 'image');
-  $('#wp-flat-ui').classList.toggle('hidden', S.wallMode !== 'flat');
-  $('#blur-sw').classList.toggle('on', S.wallBlur);
+  const st = cur();
+  $$('#wp-seg button').forEach(x => x.classList.toggle('on', x.dataset.wp === st.wallMode));
+  $('#wp-image-ui').classList.toggle('hidden', st.wallMode !== 'image');
+  $('#wp-flat-ui').classList.toggle('hidden', st.wallMode !== 'flat');
+  $('#blur-sw').classList.toggle('on', st.wallBlur);
+  $('#up-img').src = st.wallB64 ? 'data:image;base64,' + st.wallB64 : '';
   buildWallSwatches();
 }
 function buildWallSwatches() {
+  const st = cur();
   const box = $('#wall-swatches'); box.innerHTML = '';
   const auto = document.createElement('button');
   auto.className = 'swatch auto'; auto.textContent = '⚡';
-  if (S.wallIdx === -1 && !S.wallCustom) auto.classList.add('on');
-  auto.onclick = () => { S.wallIdx = -1; S.wallCustom = null; buildWallSwatches(); schedulePreview(); };
+  if (st.wallIdx === -1 && !st.wallCustom) auto.classList.add('on');
+  auto.onclick = () => { st.wallIdx = -1; st.wallCustom = null; buildWallSwatches(); schedulePreview(); };
   box.append(auto);
   S.palette.forEach((p, i) => {
     const el = document.createElement('button');
-    el.className = 'swatch' + (S.wallIdx === i && !S.wallCustom ? ' on' : '');
+    el.className = 'swatch' + (st.wallIdx === i && !st.wallCustom ? ' on' : '');
     el.style.background = p;
-    el.onclick = () => { S.wallIdx = i; S.wallCustom = null; buildWallSwatches(); schedulePreview(); };
+    el.onclick = () => { st.wallIdx = i; st.wallCustom = null; buildWallSwatches(); schedulePreview(); };
     box.append(el);
   });
-  $('#wall-hex-in').value = S.wallCustom ? hex(S.wallCustom) : '';
+  $('#wall-hex-in').value = st.wallCustom ? hex(st.wallCustom) : '';
 }
 $('#wall-hex-apply').onclick = () => {
+  const st = cur();
   const c = parseHex($('#wall-hex-in').value);
   if (!c) { toast('Bad hex — try #1a2b3c'); return; }
-  S.wallCustom = c; S.wallIdx = -1;
+  st.wallCustom = c; st.wallIdx = -1;
   buildWallSwatches(); schedulePreview();
 };
 $('#wall-hex-in').addEventListener('keydown', e => { if (e.key === 'Enter') $('#wall-hex-apply').click(); });
 
 $('#blur-sw').onclick = () => {
-  S.wallBlur = !S.wallBlur;
-  $('#blur-sw').classList.toggle('on', S.wallBlur);
+  const st = cur();
+  st.wallBlur = !st.wallBlur;
+  $('#blur-sw').classList.toggle('on', st.wallBlur);
   schedulePreview();
 };
 
@@ -526,8 +579,9 @@ $('#wall-file-in').onchange = async e => {
   const f = e.target.files[0];
   if (!f) return;
   const b64 = await fileToB64(f);
-  S.wallB64 = b64;
-  S.wallMode = 'image';
+  const st = cur();
+  st.wallB64 = b64;
+  st.wallMode = 'image';
   $('#up-img').src = 'data:image;base64,' + b64;
   $('#up-img').classList.remove('hidden');
   $('#up-re').classList.remove('hidden');
@@ -582,17 +636,40 @@ function enterEditor() {
   $('#drop').classList.add('hidden');
   $('#editor').classList.remove('hidden');
   $('#footer').classList.remove('hidden');
+  if (PAIRED) {
+    $('#tabs').classList.remove('hidden');
+    setTab(true);
+  } else {
+    $('#tabs').classList.add('hidden');
+    setTab(true);
+  }
+}
+
+/* ============ Paired tabs ============ */
+function setTab(mine) {
+  editingMine = mine;
+  if (PAIRED && !mine && !P._inited) {
+    mirrorInit();     // first switch: mirror my design as the starting point
+    P._inited = true;
+  }
+  $$('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === (mine ? 'mine' : 'theirs')));
+  $('#tab-hint').textContent = mine ? 'your half' : 'their half';
+  $('#pv-cap').textContent = mine ? 'your half — live preview' : 'their half — live preview';
+  $('#btn-create').textContent = PAIRED ? (mine ? 'Next: their half →' : '✨ Create paired themes') : '✨ Create theme';
   buildSectionChips(); buildSwatches(); syncAlphaUI(); syncWpUI();
-  $$('#mode-seg button').forEach(x => x.classList.toggle('on', x.dataset.mode === S.mode));
+  $$('#mode-seg button').forEach(x => x.classList.toggle('on', x.dataset.mode === cur().mode));
   schedulePreview();
 }
+$('#tab-mine').onclick = () => setTab(true);
+$('#tab-theirs').onclick = () => setTab(false);
 
 /* ============ Actions ============ */
 $('#btn-reset').onclick = () => {
-  S.sections = defSections();
-  S.active = 'bg';
-  S.wallMode = S.wallB64 ? 'image' : 'flat';
-  S.wallIdx = -1; S.wallCustom = null; S.wallBlur = false;
+  const st = cur();
+  st.sections = defSections();
+  st.active = 'bg';
+  st.wallMode = st.wallB64 ? 'image' : 'flat';
+  st.wallIdx = -1; st.wallCustom = null; st.wallBlur = false;
   buildSectionChips(); buildSwatches(); syncAlphaUI(); syncWpUI();
   schedulePreview();
   toast('Reset 🔄');
@@ -601,13 +678,14 @@ $('#btn-reset').onclick = () => {
 $('#btn-random').onclick = () => {
   // shuffle: random palette picks + alphas, derived ONLY from palette colors
   if (!S.palette.length) { toast('Upload an image first'); return; }
+  const st = cur();
   for (const k of ['bg','bar','in','out','text','accent','reply']) {
-    S.sections[k].idx = Math.floor(Math.random() * S.palette.length);
-    S.sections[k].custom = null;
-    if (ALPHA_SECS.includes(k)) S.sections[k].alpha = [0,0,0,25,50][Math.floor(Math.random()*5)];
+    st.sections[k].idx = Math.floor(Math.random() * S.palette.length);
+    st.sections[k].custom = null;
+    if (ALPHA_SECS.includes(k)) st.sections[k].alpha = [0,0,0,25,50][Math.floor(Math.random()*5)];
   }
-  S.mode = Math.random() < .5 ? 'dark' : 'light';
-  $$('#mode-seg button').forEach(x => x.classList.toggle('on', x.dataset.mode === S.mode));
+  st.mode = Math.random() < .5 ? 'dark' : 'light';
+  $$('#mode-seg button').forEach(x => x.classList.toggle('on', x.dataset.mode === st.mode));
   buildSectionChips(); buildSwatches(); syncAlphaUI();
   schedulePreview();
   toast('Rolled the dice 🎲');
@@ -627,25 +705,45 @@ $('#btn-create').onclick = async () => {
   const btn = $('#btn-create');
   btn.disabled = true; btn.textContent = '⏳ Building…';
   try {
-    const r = await api('/api/state', netState());
-    const payload = JSON.stringify({
+    if (PAIRED && editingMine) {
+      // step 1 of 2: jump to their half
+      setTab(false);
+      toast('Now design their half 💙');
+      return;
+    }
+    const r = await api('/api/state', netState(S));
+    let payload = {
       id: r.id, filename: r.filename, accent: r.accent,
       alphaIn: r.alphaIn, alphaOut: r.alphaOut,
-    });
+    };
+    if (PAIRED) {
+      if (!P._inited) mirrorInit();   // untouched partner tab → mirrored default
+      const r2 = await api('/api/state', netState(P));
+      payload.paired = { id: r2.id, filename: r2.filename };
+    }
     if (tg?.sendData) {
-      tg.sendData(payload);          // → bot sends the .attheme in chat
-      toast('Theme sent to chat ✨');
+      tg.sendData(JSON.stringify(payload));   // → bot sends the .attheme(s) in chat
+      toast(PAIRED ? 'Paired themes sent to chat 💜' : 'Theme sent to chat ✨');
     } else {
       // browser fallback: download directly
       const a = document.createElement('a');
       a.href = r.file; a.download = r.filename;
       document.body.append(a); a.click(); a.remove();
-      toast('Downloaded ' + r.filename);
+      if (PAIRED && payload.paired) {
+        const r2 = await fetch(payload.paired.id ? '/api/state' : '/api/state'); // unused; kept simple
+        // second file: fetch via stored id
+        const a2 = document.createElement('a');
+        a2.href = '/api/theme/' + payload.paired.id + '/file.attheme';
+        a2.download = payload.paired.filename;
+        document.body.append(a2); a2.click(); a2.remove();
+      }
+      toast('Downloaded ' + (PAIRED ? 'both themes' : r.filename));
     }
   } catch (e) {
     toast('Build failed — try again');
   } finally {
-    btn.disabled = false; btn.textContent = '✨ Create theme';
+    btn.disabled = false;
+    btn.textContent = PAIRED ? (editingMine ? 'Next: their half →' : '✨ Create paired themes') : '✨ Create theme';
   }
 };
 

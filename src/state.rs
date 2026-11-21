@@ -44,20 +44,13 @@ pub const COLOR_SECTIONS: [&str; 7] = ["bg", "bar", "in", "out", "text", "accent
 /// transparent windows broke the drawer and the forward screen.
 pub const ALPHA_SECTIONS: [&str; 6] = ["bar", "in", "out", "text", "accent", "reply"];
 
-pub const WELCOME: &str = "🎨 <b>Theme Creator</b>\n\n\
-Hi! I build Telegram themes (.attheme) from your picture.\n\n\
-<b>How it works</b>\n\
-1️⃣ Send me any image — I grab its colors\n\
-2️⃣ Pick 🌙 Dark or ☀️ Light mode\n\
-3️⃣ Pick a part: BG, Bar, In/Out bubbles, 🐻‍❄️ Text, Accent, Reply, Wallpaper\n\
-4️⃣ Choose a color (⚡ auto, №1-6 suggested, or type #hex)\n\
-    and set transparency with the slider\n\
-5️⃣ ✅ Create theme — done!\n\n\
-🐻‍❄️ Text is white by default in Dark mode\n\
-🔍 Wallpaper can be blurred or original — toggle it in the Wall section\n\
-🏷 Reply = username + quoted text in replies (white by default)\n\
-🔄 Reset clears only the part you're editing.\n\
-📸 <b>Send a picture to start!</b>";
+pub const WELCOME: &str = "🎨 <b>Theme creation</b>\n\n\
+Create a theme for yourself — or pair two matching themes for you and your \
+favorite person 💜\n\n\
+Everything happens in the web editor: pick an image, choose colors, \
+transparency and the wallpaper — live preview on every step.\n\n\
+📸 You can also just send me an image right here — I'll grab its colors \
+and open the editor with them.";
 
 /// Everything one chat's editor needs (mirrors bot.py default_state).
 #[derive(Clone, Debug)]

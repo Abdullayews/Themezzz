@@ -91,19 +91,17 @@ async fn dispatch_message(bot: Bot, msg: Message, sessions: Sessions) -> Respons
 }
 
 pub async fn cmd_start(bot: Bot, msg: Message) -> ResponseResult<()> {
+    send_menu(bot, msg.chat.id).await
+}
+
+/// The chat menu, Nagram-style: two choices, everything else in the web UI.
+/// `web_app=true` buttons open the Mini App directly; `CallbackData` rows are
+/// kept for menu navigation (Back to menu).
+async fn send_menu(bot: Bot, chat_id: ChatId) -> ResponseResult<()> {
     let url = web_app_url();
-    if !url.is_empty() {
-        let kb = InlineKeyboardMarkup::new([[InlineKeyboardButton::new(
-            "🎨 Open Theme Editor",
-            InlineKeyboardButtonKind::WebApp(web_app_info(&url)),
-        )]]);
-        bot.send_message(msg.chat.id, WELCOME)
-            .parse_mode(ParseMode::Html)
-            .reply_markup(kb)
-            .await?;
-    } else {
+    if url.is_empty() {
         bot.send_message(
-            msg.chat.id,
+            chat_id,
             format!(
                 "{WELCOME}\n\n⚠️ WEBAPP_URL is not configured on the server — \
                  tell the admin (web editor disabled)."
@@ -111,11 +109,37 @@ pub async fn cmd_start(bot: Bot, msg: Message) -> ResponseResult<()> {
         )
         .parse_mode(ParseMode::Html)
         .await?;
+        return Ok(());
     }
+    // "?mode=solo" / "?mode=paired": the Mini App reads this on load.
+    let solo = format!("{url}?mode=solo");
+    let paired = format!("{url}?mode=paired");
+    let kb = InlineKeyboardMarkup::new(vec![
+        vec![
+            InlineKeyboardButton::new(
+                "👤 For myself",
+                InlineKeyboardButtonKind::WebApp(web_app_info(&solo)),
+            ),
+            InlineKeyboardButton::new(
+                "👥 Paired",
+                InlineKeyboardButtonKind::WebApp(web_app_info(&paired)),
+            ),
+        ],
+        vec![InlineKeyboardButton::new(
+            "« Back to menu",
+            InlineKeyboardButtonKind::CallbackData("menu".to_string()),
+        )],
+    ]);
+    bot.send_message(chat_id, WELCOME)
+        .parse_mode(ParseMode::Html)
+        .reply_markup(kb)
+        .await?;
     Ok(())
 }
 
-/// web_app_data from the Mini App: `{"id": "...", "filename": "..."}`.
+/// web_app_data from the Mini App: `{"id": "...", "filename": "...",
+/// "paired": {"id": "...", "filename": "..."}}` — the second entry is the
+/// partner half when the user built a paired set.
 async fn on_web_app_data(bot: Bot, msg: Message, _sessions: &Sessions) -> ResponseResult<()> {
     let Some(data) = msg.web_app_data() else {
         return Ok(());
@@ -126,12 +150,39 @@ async fn on_web_app_data(bot: Bot, msg: Message, _sessions: &Sessions) -> Respon
             .await?;
         return Ok(());
     };
-    let id = v
-        .get("id")
+
+    let base = crate::config::external_url();
+    let client = reqwest::Client::new();
+
+    // Main theme (required) + optional paired partner theme.
+    let main_id = v.get("id").and_then(|x| x.as_str()).unwrap_or_default();
+    let paired_id = v
+        .get("paired")
+        .and_then(|p| p.get("id"))
         .and_then(|x| x.as_str())
-        .unwrap_or_default()
-        .to_string();
-    if id.is_empty() {
+        .unwrap_or_default();
+
+    let fetch = |id: &str| {
+        let file_url = format!("{base}/api/theme/{id}/file.attheme");
+        let preview_url = format!("{base}/api/theme/{id}/preview.png");
+        let client = client.clone();
+        async move {
+            let (f, p) = tokio::join!(
+                client.get(&file_url).send(),
+                client.get(&preview_url).send()
+            );
+            let (fb, pb) = match (f, p) {
+                (Ok(f), Ok(p)) => match tokio::join!(f.bytes(), p.bytes()) {
+                    (Ok(fb), Ok(pb)) => (fb.to_vec(), pb.to_vec()),
+                    _ => (Vec::new(), Vec::new()),
+                },
+                _ => (Vec::new(), Vec::new()),
+            };
+            (fb, pb)
+        }
+    };
+
+    if main_id.is_empty() {
         bot.send_message(
             msg.chat.id,
             "😕 Theme not found (expired?). Build it again.",
@@ -139,23 +190,7 @@ async fn on_web_app_data(bot: Bot, msg: Message, _sessions: &Sessions) -> Respon
         .await?;
         return Ok(());
     }
-
-    let base = crate::config::external_url();
-    let file_url = format!("{base}/api/theme/{id}/file.attheme");
-    let preview_url = format!("{base}/api/theme/{id}/preview.png");
-
-    // Download both from our own server (works both in prod and tests).
-    let client = reqwest::Client::new();
-    let (file_bytes, preview_bytes) = match tokio::join!(
-        client.get(&file_url).send(),
-        client.get(&preview_url).send()
-    ) {
-        (Ok(f), Ok(p)) => match tokio::join!(f.bytes(), p.bytes()) {
-            (Ok(fb), Ok(pb)) => (fb.to_vec(), pb.to_vec()),
-            _ => (Vec::new(), Vec::new()),
-        },
-        _ => (Vec::new(), Vec::new()),
-    };
+    let (file_bytes, preview_bytes) = fetch(main_id).await;
     if file_bytes.is_empty() {
         bot.send_message(
             msg.chat.id,
@@ -164,6 +199,7 @@ async fn on_web_app_data(bot: Bot, msg: Message, _sessions: &Sessions) -> Respon
         .await?;
         return Ok(());
     }
+
     let filename = v
         .get("filename")
         .and_then(|x| x.as_str())
@@ -177,23 +213,57 @@ async fn on_web_app_data(bot: Bot, msg: Message, _sessions: &Sessions) -> Respon
     let a_in = v.get("alphaIn").and_then(|x| x.as_u64()).unwrap_or(0);
     let a_out = v.get("alphaOut").and_then(|x| x.as_u64()).unwrap_or(0);
 
-    let caption = format!(
-        "🎨 <b>Your theme is ready!</b>\nAccent {} · In {}% · Out {}%\n\n\
-         Open the file — Telegram applies it instantly ✨",
-        accent, a_in, a_out
-    );
-    // Preview photo first, then the file with a fresh caption.
+    let is_paired = !paired_id.is_empty();
+    let caption = if is_paired {
+        "💜 <b>Your paired themes are ready!</b>\n\
+         First one is yours, second is for your favorite person — send it to them!\n\n\
+         Open the files — Telegram applies them instantly ✨"
+            .to_string()
+    } else {
+        format!(
+            "🎨 <b>Your theme is ready!</b>\nAccent {} · In {}% · Out {}%\n\n\
+             Open the file — Telegram applies it instantly ✨",
+            accent, a_in, a_out
+        )
+    };
+
+    // Preview photo first, then the file(s) with the caption on the last one.
     if !preview_bytes.is_empty() {
         let _ = bot
             .send_photo(msg.chat.id, InputFile::memory(preview_bytes))
-            .caption(&caption)
+            .caption(if is_paired {
+                "💜 Your half of the pair"
+            } else {
+                &caption
+            })
             .parse_mode(ParseMode::Html)
             .await;
+    }
+    if is_paired {
+        let (p_file, p_preview) = fetch(paired_id).await;
+        if !p_file.is_empty() {
+            if !p_preview.is_empty() {
+                let _ = bot
+                    .send_photo(msg.chat.id, InputFile::memory(p_preview))
+                    .caption("💙 Their half of the pair")
+                    .parse_mode(ParseMode::Html)
+                    .await;
+            }
+            let _ = bot
+                .send_document(
+                    msg.chat.id,
+                    InputFile::memory(p_file)
+                        .file_name(filename.replace(".attheme", "_paired.attheme")),
+                )
+                .await;
+        }
     }
     bot.send_document(
         msg.chat.id,
         InputFile::memory(file_bytes).file_name(filename),
     )
+    .caption(&caption)
+    .parse_mode(ParseMode::Html)
     .await?;
     Ok(())
 }
@@ -266,28 +336,39 @@ pub async fn on_image(bot: Bot, msg: Message, sessions: &Sessions) -> ResponseRe
     Ok(())
 }
 
-async fn on_text(bot: Bot, msg: Message, sessions: &Sessions) -> ResponseResult<()> {
-    let has_session = sessions.0.lock().unwrap().contains_key(&msg.chat.id);
-    let _ = has_session;
+async fn on_text(bot: Bot, msg: Message, _sessions: &Sessions) -> ResponseResult<()> {
     bot.send_message(
         msg.chat.id,
-        "📸 Send me an image to grab its colors, or tap **Open Theme Editor** to build a theme from scratch!",
+        "📸 Send me an image and I'll grab its colors — or tap <b>For myself</b> \
+         / <b>Paired</b> to open the web editor!",
     )
+    .parse_mode(ParseMode::Html)
     .await?;
     Ok(())
 }
 
-/// Legacy callback handler — kept for old keyboards still in chats.
-pub async fn on_callback(bot: Bot, q: CallbackQuery, sessions: &Sessions) -> ResponseResult<()> {
-    if q.data.is_none() {
+/// Menu navigation + legacy keyboards: "menu" re-sends the start menu,
+/// anything else (old editor callbacks) points to the web app.
+pub async fn on_callback(bot: Bot, q: CallbackQuery, _sessions: &Sessions) -> ResponseResult<()> {
+    let Some(data) = q.data.clone() else {
         bot.answer_callback_query(&q.id).await?;
         return Ok(());
+    };
+    match data.as_str() {
+        "menu" => {
+            bot.answer_callback_query(&q.id).await?;
+            if let Some(chat_id) = q.message.map(|m| m.chat().id) {
+                // send a fresh menu message to the originating chat
+                send_menu(bot, chat_id).await?;
+            }
+        }
+        _ => {
+            bot.answer_callback_query(&q.id)
+                .text("This editor has moved to the web app — tap \"For myself\" or \"Paired\".")
+                .show_alert(true)
+                .await?;
+        }
     }
-    let _ = sessions;
-    bot.answer_callback_query(&q.id)
-        .text("This editor has moved to the web app — tap \"Open Theme Editor\".")
-        .show_alert(true)
-        .await?;
     Ok(())
 }
 

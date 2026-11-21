@@ -10,11 +10,7 @@ use tower::ServiceExt; // for oneshot
 fn test_png() -> Vec<u8> {
     use image::{ImageBuffer, Rgb, RgbImage};
     let img: RgbImage = ImageBuffer::from_fn(64, 64, |x, y| {
-        Rgb([
-            (x * 4) as u8,
-            (y * 4) as u8,
-            ((x + y) * 2) as u8,
-        ])
+        Rgb([(x * 4) as u8, (y * 4) as u8, ((x + y) * 2) as u8])
     });
     let mut buf = std::io::Cursor::new(Vec::new());
     image::DynamicImage::ImageRgb8(img)
@@ -42,7 +38,9 @@ async fn api_full_flow() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap();
+    let body = axum::body::to_bytes(res.into_body(), 1 << 20)
+        .await
+        .unwrap();
     let html = String::from_utf8_lossy(&body).to_string();
     assert!(html.contains("Themezzz"), "mini app html must load");
     assert!(html.contains("telegram-web-app"), "must init Telegram SDK");
@@ -62,7 +60,9 @@ async fn api_full_flow() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap();
+    let body = axum::body::to_bytes(res.into_body(), 1 << 20)
+        .await
+        .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let palette = v["palette"].as_array().unwrap().clone();
     assert_eq!(palette.len(), 6, "6 palette colors, got {palette:?}");
@@ -101,7 +101,9 @@ async fn api_full_flow() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap();
+    let body = axum::body::to_bytes(res.into_body(), 1 << 20)
+        .await
+        .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let id = v["id"].as_str().unwrap().to_string();
     assert!(!id.is_empty());
@@ -123,8 +125,14 @@ async fn api_full_flow() {
     assert_eq!(res.status(), StatusCode::OK);
     let ct = res.headers().get("content-type").unwrap().to_str().unwrap();
     assert_eq!(ct, "image/png");
-    let body = axum::body::to_bytes(res.into_body(), 1 << 24).await.unwrap();
-    assert!(body.len() > 10_000, "preview should be a real PNG, got {} bytes", body.len());
+    let body = axum::body::to_bytes(res.into_body(), 1 << 24)
+        .await
+        .unwrap();
+    assert!(
+        body.len() > 10_000,
+        "preview should be a real PNG, got {} bytes",
+        body.len()
+    );
 
     // 6. Fetch the thumbnail
     let res = app
@@ -138,7 +146,9 @@ async fn api_full_flow() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap();
+    let body = axum::body::to_bytes(res.into_body(), 1 << 20)
+        .await
+        .unwrap();
     assert!(body.len() > 500, "thumb should be a real PNG");
 
     // 7. Fetch the .attheme file
@@ -161,7 +171,9 @@ async fn api_full_flow() {
         .unwrap()
         .to_string();
     assert!(cd.contains(".attheme"), "cd header: {cd}");
-    let body = axum::body::to_bytes(res.into_body(), 1 << 24).await.unwrap();
+    let body = axum::body::to_bytes(res.into_body(), 1 << 24)
+        .await
+        .unwrap();
     let theme = String::from_utf8_lossy(&body).to_string();
     assert!(theme.contains("chat_inBubble="));
     assert!(theme.contains("chat_outBubble="));
