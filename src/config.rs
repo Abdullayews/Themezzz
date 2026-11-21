@@ -35,7 +35,17 @@ pub fn webhook_url() -> String {
     format!("{}/telegram", external_url())
 }
 
-/// Shared secret for the webhook endpoint (set on Render for extra safety).
+/// Shared secret for the webhook endpoint. WEBHOOK_SECRET (1..=256 chars)
+/// when set; otherwise a fixed built-in default so the webhook is always
+/// signed, even with no env config on Render.
 pub fn webhook_secret() -> String {
-    std::env::var("WEBHOOK_SECRET").unwrap_or_default()
+    let s = std::env::var("WEBHOOK_SECRET")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if s.is_empty() {
+        "themezzz-default-webhook-secret-v1".to_string()
+    } else {
+        s
+    }
 }

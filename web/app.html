@@ -175,9 +175,10 @@ input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border-radius: 
   <!-- Empty state -->
   <section class="card" id="drop">
     <div class="big">🖼️</div>
-    <p><b style="color:var(--text)">Create a Telegram theme</b><br>Pick any image — I'll pull its colors, then fine-tune every part live.</p>
+    <p><b style="color:var(--text)">Send me an image</b><br>I'll grab its colors, then you can fine-tune every part live.</p>
+    <button class="btn primary" id="btn-pick" style="max-width:240px">📷 Choose image</button>
     <div class="or">—— OR ——</div>
-    <button class="btn primary" id="btn-scratch" style="max-width:240px">✨ Start from scratch</button>
+    <button class="btn ghost" id="btn-scratch" style="max-width:240px">✨ Start from scratch</button>
   </section>
 
   <!-- Editor -->
@@ -600,7 +601,9 @@ function fileToB64(file) {
 }
 
 /* ============ Palette upload (hero) ============ */
+$('#btn-pick').onclick = () => $('#file-in').click();
 $('#btn-scratch').onclick = () => {
+  // scratch = the only path without an image; make it explicit
   S.palette = ['#1d3557','#e63946','#457b9d','#a8dadc','#f1faee','#6d597a'];
   enterEditor();
 };

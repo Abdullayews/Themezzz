@@ -45,12 +45,12 @@ pub const COLOR_SECTIONS: [&str; 7] = ["bg", "bar", "in", "out", "text", "accent
 pub const ALPHA_SECTIONS: [&str; 6] = ["bar", "in", "out", "text", "accent", "reply"];
 
 pub const WELCOME: &str = "🎨 <b>Theme creation</b>\n\n\
-Create a theme for yourself — or pair two matching themes for you and your \
-favorite person 💜\n\n\
-Everything happens in the web editor: pick an image, choose colors, \
-transparency and the wallpaper — live preview on every step.\n\n\
-📸 You can also just send me an image right here — I'll grab its colors \
-and open the editor with them.";
+📸 <b>Send me an image first</b> — I'll grab its colors.\n\n\
+Then pick:\n\
+👤 <b>For myself</b> — one theme just for you\n\
+👥 <b>Paired</b> — two matching themes for you and your favorite person 💜\n\n\
+Everything after that happens in the web editor: colors, transparency \
+and the wallpaper, with a live preview on every step.";
 
 /// Everything one chat's editor needs (mirrors bot.py default_state).
 #[derive(Clone, Debug)]

@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use teloxide::prelude::*;
 use teloxide::types::{
-    InlineKeyboardButton, InlineKeyboardButtonKind, InlineKeyboardMarkup, InputFile, ParseMode,
-    WebAppInfo,
+    ChatAction, InlineKeyboardButton, InlineKeyboardButtonKind, InlineKeyboardMarkup, InputFile,
+    ParseMode, WebAppInfo,
 };
 use tokio::io::AsyncWriteExt;
 
@@ -190,6 +190,11 @@ async fn on_web_app_data(bot: Bot, msg: Message, _sessions: &Sessions) -> Respon
         .await?;
         return Ok(());
     }
+    // Python 1:1: "⏳ Creating theme..." indicator while the theme is built
+    // and fetched — send_chat_action shows the typing status in chat.
+    let _ = bot.send_chat_action(msg.chat.id, ChatAction::Typing).await;
+    bot.send_message(msg.chat.id, "⏳ Creating theme...")
+        .await?;
     let (file_bytes, preview_bytes) = fetch(main_id).await;
     if file_bytes.is_empty() {
         bot.send_message(
