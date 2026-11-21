@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Themezzz — Theme Editor</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root {
+  --bg: #0e1621; --bg2: #17212b; --panel: #1c2733; --panel2: #232e3c;
+  --text: #f5f5f5; --muted: #8b9aa8; --accent: #5eb5e7; --accent2: #3d8fbf;
+  --good: #4cd964; --radius: 14px; --radius2: 10px;
+  --shadow: 0 4px 16px rgba(0,0,0,.35);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg); color: var(--text);
+  display: flex; flex-direction: column; overflow: hidden;
+  touch-action: manipulation;
+}
+header {
+  display: flex; align-items: center; gap: 10px;
+  padding: max(10px, env(safe-area-inset-top)) 16px 10px;
+  background: var(--bg2); position: relative; z-index: 5;
+}
+header .logo { font-size: 22px; }
+header h1 { font-size: 17px; font-weight: 700; letter-spacing: .3px; flex: 1; }
+header .hbtn {
+  width: 34px; height: 34px; border-radius: 50%; border: none; cursor: pointer;
+  background: var(--panel); color: var(--text); font-size: 16px;
+  display: flex; align-items: center; justify-content: center;
+}
+main { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 14px 14px 20px; -webkit-overflow-scrolling: touch; }
+footer {
+  padding: 10px 16px max(12px, env(safe-area-inset-bottom));
+  background: var(--bg2); display: flex; gap: 10px; position: relative; z-index: 5;
+}
+.btn {
+  flex: 1; border: none; border-radius: var(--radius2); cursor: pointer;
+  padding: 14px 10px; font-size: 15px; font-weight: 700; color: #fff;
+  background: var(--accent2); transition: transform .08s, opacity .2s;
+}
+.btn:active { transform: scale(.97); }
+.btn.primary { background: var(--accent); color: #0b1a26; }
+.btn.ghost { background: var(--panel); color: var(--text); font-weight: 600; }
+.btn[disabled] { opacity: .55; pointer-events: none; }
+section.card {
+  background: var(--panel); border-radius: var(--radius);
+  padding: 14px; margin-bottom: 14px; box-shadow: var(--shadow);
+}
+.card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+.card h2 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+
+/* Preview */
+#preview-wrap { position: relative; }
+#preview { width: 100%; border-radius: var(--radius); display: block; touch-action: none; }
+#pv-cap { position: absolute; left: 12px; top: 12px; font-size: 11px; background: rgba(0,0,0,.5); padding: 4px 10px; border-radius: 20px; color: #fff; opacity: .8; }
+#pv-spin { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(14,22,33,.35); border-radius: var(--radius); color: var(--muted); font-size: 12px; }
+#pv-spin.on { display: flex; }
+.spin { animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .4; } }
+
+/* Mode switch */
+.seg { display: flex; background: var(--bg); border-radius: var(--radius2); padding: 4px; gap: 4px; }
+.seg button {
+  flex: 1; border: none; border-radius: 8px; padding: 10px 0; cursor: pointer;
+  font-size: 14px; font-weight: 700; color: var(--muted); background: transparent;
+}
+.seg button.on { background: var(--accent); color: #0b1a26; }
+
+/* Sections */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip {
+  border: 1.5px solid transparent; background: var(--panel2); color: var(--text);
+  border-radius: 20px; padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer;
+  display: flex; align-items: center; gap: 7px;
+}
+.chip .sw { width: 14px; height: 14px; border-radius: 5px; border: 1px solid rgba(255,255,255,.25); }
+.chip.on { border-color: var(--accent); background: rgba(94,181,231,.14); }
+
+/* Swatch row */
+.swatches { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.swatch {
+  width: 40px; height: 40px; border-radius: 12px; cursor: pointer; position: relative;
+  border: 2px solid transparent; transition: transform .1s;
+}
+.swatch:active { transform: scale(.9); }
+.swatch.on { border-color: #fff; box-shadow: 0 0 0 2px var(--accent); }
+.swatch.auto {
+  background: conic-gradient(#f66 0 25%, #fc6 0 50%, #6f8 0 75%, #6cf 0);
+  color: #0b1a26; font-size: 17px; font-weight: 800; display: flex; align-items: center; justify-content: center;
+}
+.hexrow { display: flex; gap: 8px; margin-top: 10px; }
+.hexrow input {
+  flex: 1; background: var(--bg); border: 1px solid var(--panel2); color: var(--text);
+  border-radius: var(--radius2); padding: 10px 12px; font-size: 14px; font-family: ui-monospace, Menlo, monospace;
+}
+.hexrow button {
+  border: none; border-radius: var(--radius2); padding: 10px 16px; cursor: pointer;
+  background: var(--accent2); color: #fff; font-weight: 700; font-size: 14px;
+}
+
+/* Sliders */
+label.row { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); margin: 10px 0 6px; }
+label.row b { color: var(--text); }
+input[type=range] {
+  -webkit-appearance: none; appearance: none; width: 100%; height: 4px; border-radius: 4px;
+  background: linear-gradient(90deg, var(--accent) var(--val, 0%), var(--bg) var(--val, 0%));
+  outline: none; margin: 8px 0;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 24px; height: 24px; border-radius: 50%;
+  background: #fff; border: none; box-shadow: 0 2px 8px rgba(0,0,0,.5); cursor: pointer;
+}
+input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border-radius: 50%; background: #fff; border: none; box-shadow: 0 2px 8px rgba(0,0,0,.5); }
+
+/* Wallpaper */
+.wp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 8px; }
+.wp-opt {
+  aspect-ratio: 3/4; border-radius: 10px; overflow: hidden; cursor: pointer; position: relative;
+  border: 2px solid transparent; background: var(--bg);
+}
+.wp-opt img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.wp-opt.on { border-color: var(--accent); }
+.wp-opt .tag { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; color: #fff; background: rgba(0,0,0,.45); font-weight: 700; }
+.upzone {
+  border: 1.5px dashed var(--panel2); border-radius: var(--radius2); padding: 18px 10px;
+  text-align: center; color: var(--muted); font-size: 13px; cursor: pointer; margin-top: 10px;
+}
+.upzone.has { border-style: solid; padding: 0; overflow: hidden; position: relative; }
+.upzone.has img { width: 100%; display: block; max-height: 140px; object-fit: cover; }
+.upzone .re { position: absolute; right: 8px; top: 8px; background: rgba(0,0,0,.6); color: #fff; border: none; border-radius: 20px; padding: 6px 10px; font-size: 11px; cursor: pointer; }
+.toggle-row { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; }
+.toggle-row span { font-size: 14px; }
+.tswitch { width: 46px; height: 26px; border-radius: 20px; background: var(--bg); position: relative; cursor: pointer; transition: background .2s; border: none; }
+.tswitch::after {
+  content: ''; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%;
+  background: #fff; transition: left .2s;
+}
+.tswitch.on { background: var(--accent); }
+.tswitch.on::after { left: 23px; }
+
+/* Toast */
+#toast {
+  position: fixed; left: 50%; bottom: 84px; transform: translateX(-50%) translateY(20px);
+  background: rgba(0,0,0,.8); color: #fff; padding: 10px 18px; border-radius: 20px; font-size: 13px;
+  opacity: 0; transition: all .25s; pointer-events: none; z-index: 99; max-width: 80vw; text-align: center;
+}
+#toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* Skeleton + upload screen */
+#drop { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 20px; text-align: center; }
+#drop .big { font-size: 46px; margin-bottom: 12px; }
+#drop p { color: var(--muted); font-size: 14px; line-height: 1.5; max-width: 280px; }
+#drop .or { margin: 18px 0; color: var(--muted); font-size: 12px; letter-spacing: 2px; }
+.hidden { display: none !important; }
+
+@media (max-width: 360px) {
+  .swatch { width: 36px; height: 36px; }
+  main { padding: 10px 10px 16px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <span class="logo">🎨</span>
+  <h1>Themezzz</h1>
+  <button class="hbtn" id="btn-share" title="Share">✈️</button>
+  <button class="hbtn" id="btn-random" title="Randomize">🎲</button>
+</header>
+
+<main id="main">
+  <!-- Empty state -->
+  <section class="card" id="drop">
+    <div class="big">🖼️</div>
+    <p><b style="color:var(--text)">Create a Telegram theme</b><br>Pick any image — I'll pull its colors, then fine-tune every part live.</p>
+    <div class="or">—— OR ——</div>
+    <button class="btn primary" id="btn-scratch" style="max-width:240px">✨ Start from scratch</button>
+  </section>
+
+  <!-- Editor -->
+  <div id="editor" class="hidden">
+    <section class="card" id="preview-wrap">
+      <img id="preview" alt="Theme preview">
+      <div id="pv-cap">live preview</div>
+      <div id="pv-spin"><span class="spin">rendering…</span></div>
+    </section>
+
+    <section class="card">
+      <h2><span class="dot"></span>Modes</h2>
+      <div class="seg" id="mode-seg">
+        <button data-mode="dark">🌙 Dark</button>
+        <button data-mode="light">☀️ Light</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2><span class="dot"></span>Theme parts</h2>
+      <div class="chips" id="sections"></div>
+      <div class="swatches" id="swatches" style="margin-top:12px"></div>
+      <div class="hexrow">
+        <input id="hex-in" placeholder="#34c7a4 or 34c7a4" maxlength="7" spellcheck="false" autocomplete="off">
+        <button id="hex-apply">Set</button>
+      </div>
+      <div id="alpha-block">
+        <label class="row"><span>🫧 Transparency</span><b id="alpha-val">0%</b></label>
+        <input type="range" id="alpha" min="0" max="100" step="5" value="0">
+        <div style="display:flex; gap:6px; flex-wrap:wrap">
+          <button class="chip" data-a="0">0%</button>
+          <button class="chip" data-a="25">25%</button>
+          <button class="chip" data-a="50">50%</button>
+          <button class="chip" data-a="75">75%</button>
+          <button class="chip" data-a="100">100%</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2><span class="dot"></span>Wallpaper</h2>
+      <div class="seg" id="wp-seg">
+        <button data-wp="image">🖼 Image</button>
+        <button data-wp="flat">🎨 Flat color</button>
+      </div>
+      <div id="wp-image-ui">
+        <div class="upzone" id="upzone">
+          <span id="up-text">📷 Tap to choose the wallpaper image</span>
+          <img id="up-img" class="hidden">
+          <button class="re hidden" id="up-re">Change</button>
+        </div>
+        <div class="toggle-row">
+          <span>🔍 Blur wallpaper</span>
+          <button class="tswitch" id="blur-sw" aria-label="blur toggle"></button>
+        </div>
+      </div>
+      <div id="wp-flat-ui" class="hidden">
+        <div class="swatches" id="wall-swatches"></div>
+        <div class="hexrow">
+          <input id="wall-hex-in" placeholder="#1a2b3c" maxlength="7" spellcheck="false" autocomplete="off">
+          <button id="wall-hex-apply">Set</button>
+        </div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer id="footer" class="hidden">
+  <button class="btn ghost" id="btn-reset">↩️ Reset</button>
+  <button class="btn primary" id="btn-create">✨ Create theme</button>
+</footer>
+
+<div id="toast"></div>
+<input type="file" id="file-in" accept="image/*" class="hidden">
+<input type="file" id="wall-file-in" accept="image/*" class="hidden">
+
+<script>
+'use strict';
+const tg = window.Telegram?.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+
+/* ============ State ============ */
+const SECS = [
+  {k:'bg', label:'Background', icon:'🖼'},
+  {k:'bar', label:'Top bar', icon:'📊'},
+  {k:'in', label:'In bubble', icon:'📥'},
+  {k:'out', label:'Out bubble', icon:'📤'},
+  {k:'text', label:'Text', icon:'✏️'},
+  {k:'accent', label:'Accent', icon:'🔵'},
+  {k:'reply', label:'Reply', icon:'🏷'},
+  {k:'wall', label:'Wallpaper', icon:'🌇'},
+];
+const ALPHA_SECS = ['bar','in','out','text','accent','reply'];
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+
+const S = {
+  palette: [],
+  mode: 'dark',
+  sections: {},           // k -> {idx, alpha, custom}
+  active: 'bg',
+  wallMode: 'flat',      // 'image' | 'flat'
+  wallIdx: -1, wallCustom: null, wallBlur: false,
+  wallB64: '',           // dataURL base64 part of the uploaded wallpaper
+  wallImgEl: null,       // Image object for canvas preview
+  previewToken: 0,
+};
+
+function defSections() {
+  const o = {};
+  for (const k of ['bg','bar','in','out','text','accent','reply'])
+    o[k] = {idx:-1, alpha:0, custom:null};
+  return o;
+}
+S.sections = defSections();
+
+/* ============ Toast ============ */
+let toastT;
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('on');
+  clearTimeout(toastT); toastT = setTimeout(()=>t.classList.remove('on'), 2200);
+}
+
+/* ============ API ============ */
+async function api(path, body) {
+  const res = await fetch(path, body ? {
+    method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
+  } : undefined);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+/* ============ Live preview (server-rendered) ============ */
+let renderTimer = null;
+function schedulePreview() {
+  clearTimeout(renderTimer);
+  renderTimer = setTimeout(renderPreview, 350);
+  $('#pv-spin').classList.add('on');
+}
+async function renderPreview() {
+  const token = ++S.previewToken;
+  try {
+    const r = await api('/api/state', netState());
+    if (token !== S.previewToken) return;   // superseded
+    $('#preview').src = r.preview + '?t=' + Date.now();
+    $('#preview').onload = () => $('#pv-spin').classList.remove('on');
+  } catch (e) {
+    $('#pv-spin').classList.remove('on');
+    toast('Preview failed — check your colors');
+  }
+}
+
+function netState() {
+  const sections = {};
+  for (const [k, v] of Object.entries(S.sections))
+    sections[k] = {idx: v.idx, alpha: v.alpha, custom: v.custom};
+  return {
+    palette: S.palette, mode: S.mode, sections, active: S.active,
+    wall_mode: S.wallMode, wall_idx: S.wallIdx,
+    wall_custom: S.wallCustom ? hex(S.wallCustom) : null,
+    wall_blur: S.wallBlur,
+    wall_b64: S.wallMode === 'image' && S.wallB64 ? S.wallB64 : null,
+  };
+}
+function hex(rgb) {
+  const h = n => n.toString(16).padStart(2,'0');
+  return '#' + h(rgb[0]) + h(rgb[1]) + h(rgb[2]);
+}
+
+/* ============ Mode switch ============ */
+$$('#mode-seg button').forEach(b => b.onclick = () => {
+  S.mode = b.dataset.mode;
+  $$('#mode-seg button').forEach(x => x.classList.toggle('on', x === b));
+  schedulePreview();
+});
+
+/* ============ Section chips ============ */
+function activeColor(k) {
+  if (k === 'wall') {
+    if (S.wallCustom) return S.wallCustom;
+    if (S.wallIdx >= 0 && S.palette[S.wallIdx]) return parseHex(S.palette[S.wallIdx]);
+    return null;
+  }
+  const sec = S.sections[k];
+  if (!sec) return null;
+  if (sec.custom) return sec.custom;
+  if (sec.idx >= 0 && S.palette[sec.idx]) return parseHex(S.palette[sec.idx]);
+  return null;
+}
+function parseHex(s) {
+  if (!s) return null;
+  let t = s.replace('#','').trim();
+  if (t.length === 3) t = [...t].map(c=>c+c).join('');
+  if (t.length !== 6 || /[^0-9a-f]/i.test(t)) return null;
+  return [parseInt(t.slice(0,2),16), parseInt(t.slice(2,4),16), parseInt(t.slice(4,6),16)];
+}
+
+function buildSectionChips() {
+  const box = $('#sections'); box.innerHTML = '';
+  for (const s of SECS) {
+    const el = document.createElement('button');
+    el.className = 'chip' + (S.active === s.k ? ' on' : '');
+    const c = s.k === 'wall' ? wallChipColor() : activeColor(s.k);
+    const sw = document.createElement('span');
+    sw.className = 'sw';
+    if (c) sw.style.background = `rgb(${c[0]},${c[1]},${c[2]})`;
+    else sw.style.background = 'conic-gradient(#f66 0 25%, #fc6 0 50%, #6f8 0 75%, #6cf 0)';
+    el.append(sw, document.createTextNode(s.icon + ' ' + s.label));
+    el.onclick = () => { S.active = s.k; buildSectionChips(); buildSwatches(); syncAlphaUI(); };
+    box.append(el);
+  }
+}
+function wallChipColor() {
+  if (S.wallMode === 'image') return null;
+  if (S.wallCustom) return S.wallCustom;
+  if (S.wallIdx >= 0 && S.palette[S.wallIdx]) return parseHex(S.palette[S.wallIdx]);
+  return null;
+}
+
+/* ============ Swatches ============ */
+function buildSwatches() {
+  const box = $('#swatches'); box.innerHTML = '';
+  const isWall = S.active === 'wall';
+  const cur = isWall
+    ? {idx: S.wallIdx, custom: S.wallCustom}
+    : {idx: S.sections[S.active].idx, custom: S.sections[S.active].custom};
+
+  const auto = document.createElement('button');
+  auto.className = 'swatch auto';
+  auto.textContent = '⚡';
+  auto.title = 'Auto — derived from the image';
+  const on = cur.idx === -1 && !cur.custom;
+  if (on) auto.classList.add('on');
+  auto.onclick = () => {
+    if (isWall) { S.wallIdx = -1; S.wallCustom = null; if (S.wallMode==='flat'){} else S.wallMode='flat'; }
+    else { S.sections[S.active].idx = -1; S.sections[S.active].custom = null; }
+    buildSectionChips(); buildSwatches(); schedulePreview();
+  };
+  box.append(auto);
+
+  S.palette.forEach((p, i) => {
+    const el = document.createElement('button');
+    el.className = 'swatch' + (cur.idx === i && !cur.custom ? ' on' : '');
+    el.style.background = p;
+    el.title = p;
+    el.onclick = () => {
+      if (isWall) { S.wallIdx = i; S.wallCustom = null; }
+      else { S.sections[S.active].idx = i; S.sections[S.active].custom = null; }
+      buildSectionChips(); buildSwatches(); schedulePreview();
+    };
+    box.append(el);
+  });
+
+  const hexIn = $('#hex-in');
+  hexIn.value = cur.custom ? hex(cur.custom) : '';
+}
+
+/* hex input */
+$('#hex-apply').onclick = applyHex;
+$('#hex-in').addEventListener('keydown', e => { if (e.key === 'Enter') applyHex(); });
+function applyHex() {
+  const c = parseHex($('#hex-in').value);
+  if (!c) { toast('Bad hex — try #34c7a4'); return; }
+  if (S.active === 'wall') { S.wallMode = 'flat'; S.wallCustom = c; S.wallIdx = -1; syncWpUI(); }
+  else { S.sections[S.active].custom = c; S.sections[S.active].idx = -1; }
+  buildSectionChips(); buildSwatches(); schedulePreview();
+}
+
+/* ============ Alpha slider ============ */
+function syncAlphaUI() {
+  const isAlpha = ALPHA_SECS.includes(S.active);
+  $('#alpha-block').style.display = isAlpha ? 'block' : 'none';
+  if (!isAlpha) return;
+  const a = S.sections[S.active].alpha;
+  $('#alpha').value = a;
+  $('#alpha-val').textContent = a + '%';
+  paintRange();
+}
+function paintRange() {
+  const r = $('#alpha');
+  r.style.setProperty('--val', r.value + '%');
+}
+$('#alpha').addEventListener('input', () => {
+  S.sections[S.active].alpha = +$('#alpha').value;
+  $('#alpha-val').textContent = $('#alpha').value + '%';
+  paintRange(); schedulePreview();
+});
+$('#alpha').addEventListener('change', schedulePreview);
+$$('#alpha-block .chip').forEach(b => b.onclick = () => {
+  S.sections[S.active].alpha = +b.dataset.a;
+  $('#alpha').value = b.dataset.a;
+  $('#alpha-val').textContent = b.dataset.a + '%';
+  paintRange(); schedulePreview();
+});
+
+/* ============ Wallpaper ============ */
+$$('#wp-seg button').forEach(b => b.onclick = () => {
+  S.wallMode = b.dataset.wp;
+  if (S.wallMode === 'image' && !S.wallB64) { toast('Pick an image first'); }
+  syncWpUI(); schedulePreview();
+});
+function syncWpUI() {
+  $$('#wp-seg button').forEach(x => x.classList.toggle('on', x.dataset.wp === S.wallMode));
+  $('#wp-image-ui').classList.toggle('hidden', S.wallMode !== 'image');
+  $('#wp-flat-ui').classList.toggle('hidden', S.wallMode !== 'flat');
+  $('#blur-sw').classList.toggle('on', S.wallBlur);
+  buildWallSwatches();
+}
+function buildWallSwatches() {
+  const box = $('#wall-swatches'); box.innerHTML = '';
+  const auto = document.createElement('button');
+  auto.className = 'swatch auto'; auto.textContent = '⚡';
+  if (S.wallIdx === -1 && !S.wallCustom) auto.classList.add('on');
+  auto.onclick = () => { S.wallIdx = -1; S.wallCustom = null; buildWallSwatches(); schedulePreview(); };
+  box.append(auto);
+  S.palette.forEach((p, i) => {
+    const el = document.createElement('button');
+    el.className = 'swatch' + (S.wallIdx === i && !S.wallCustom ? ' on' : '');
+    el.style.background = p;
+    el.onclick = () => { S.wallIdx = i; S.wallCustom = null; buildWallSwatches(); schedulePreview(); };
+    box.append(el);
+  });
+  $('#wall-hex-in').value = S.wallCustom ? hex(S.wallCustom) : '';
+}
+$('#wall-hex-apply').onclick = () => {
+  const c = parseHex($('#wall-hex-in').value);
+  if (!c) { toast('Bad hex — try #1a2b3c'); return; }
+  S.wallCustom = c; S.wallIdx = -1;
+  buildWallSwatches(); schedulePreview();
+};
+$('#wall-hex-in').addEventListener('keydown', e => { if (e.key === 'Enter') $('#wall-hex-apply').click(); });
+
+$('#blur-sw').onclick = () => {
+  S.wallBlur = !S.wallBlur;
+  $('#blur-sw').classList.toggle('on', S.wallBlur);
+  schedulePreview();
+};
+
+/* wallpaper upload */
+$('#upzone').onclick = e => {
+  if (e.target.id === 'up-re') { $('#wall-file-in').click(); return; }
+  $('#wall-file-in').click();
+};
+$('#up-re').onclick = e => { e.stopPropagation(); $('#wall-file-in').click(); };
+$('#wall-file-in').onchange = async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const b64 = await fileToB64(f);
+  S.wallB64 = b64;
+  S.wallMode = 'image';
+  $('#up-img').src = 'data:image;base64,' + b64;
+  $('#up-img').classList.remove('hidden');
+  $('#up-re').classList.remove('hidden');
+  $('#up-text').classList.add('hidden');
+  $('#upzone').classList.add('has');
+  syncWpUI(); schedulePreview();
+  toast('Wallpaper set 🌇');
+};
+function fileToB64(file) {
+  return new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => res(fr.result.split(',')[1]);
+    fr.onerror = rej;
+    fr.readAsDataURL(file);
+  });
+}
+
+/* ============ Palette upload (hero) ============ */
+$('#btn-scratch').onclick = () => {
+  S.palette = ['#1d3557','#e63946','#457b9d','#a8dadc','#f1faee','#6d597a'];
+  enterEditor();
+};
+$('#file-in').onchange = async e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  toast('Extracting colors… 🎨');
+  try {
+    const bytes = await f.arrayBuffer();
+    const r = await fetch('/api/palette', {method:'POST', body: bytes});
+    if (!r.ok) throw new Error('palette failed');
+    const j = await r.json();
+    S.palette = j.palette;
+    S.wallB64 = j.wallpaper || '';
+    if (S.wallB64) {
+      S.wallMode = 'image';
+      $('#up-img').src = 'data:image;base64,' + S.wallB64;
+      $('#up-img').classList.remove('hidden');
+      $('#up-re').classList.remove('hidden');
+      $('#up-text').classList.add('hidden');
+      $('#upzone').classList.add('has');
+    }
+    enterEditor();
+    toast('Colors grabbed ⚡');
+  } catch (err) {
+    toast('Palette failed — try another image');
+  }
+};
+// click anywhere on hero triggers picker
+$('#drop').onclick = e => { if (e.target.id !== 'btn-scratch') $('#file-in').click(); };
+
+function enterEditor() {
+  $('#drop').classList.add('hidden');
+  $('#editor').classList.remove('hidden');
+  $('#footer').classList.remove('hidden');
+  buildSectionChips(); buildSwatches(); syncAlphaUI(); syncWpUI();
+  $$('#mode-seg button').forEach(x => x.classList.toggle('on', x.dataset.mode === S.mode));
+  schedulePreview();
+}
+
+/* ============ Actions ============ */
+$('#btn-reset').onclick = () => {
+  S.sections = defSections();
+  S.active = 'bg';
+  S.wallMode = S.wallB64 ? 'image' : 'flat';
+  S.wallIdx = -1; S.wallCustom = null; S.wallBlur = false;
+  buildSectionChips(); buildSwatches(); syncAlphaUI(); syncWpUI();
+  schedulePreview();
+  toast('Reset 🔄');
+};
+
+$('#btn-random').onclick = () => {
+  // shuffle: random palette picks + alphas, derived ONLY from palette colors
+  if (!S.palette.length) { toast('Upload an image first'); return; }
+  for (const k of ['bg','bar','in','out','text','accent','reply']) {
+    S.sections[k].idx = Math.floor(Math.random() * S.palette.length);
+    S.sections[k].custom = null;
+    if (ALPHA_SECS.includes(k)) S.sections[k].alpha = [0,0,0,25,50][Math.floor(Math.random()*5)];
+  }
+  S.mode = Math.random() < .5 ? 'dark' : 'light';
+  $$('#mode-seg button').forEach(x => x.classList.toggle('on', x.dataset.mode === S.mode));
+  buildSectionChips(); buildSwatches(); syncAlphaUI();
+  schedulePreview();
+  toast('Rolled the dice 🎲');
+};
+
+$('#btn-share').onclick = () => {
+  const url = location.origin + '/app';
+  if (tg?.openTelegramLink) {
+    tg.openTelegramLink('https://t.me/share/url?url=' + encodeURIComponent(url) + '&text=' + encodeURIComponent('Check out Themezzz — turn any picture into a Telegram theme!'));
+  } else {
+    navigator.clipboard?.writeText(url).then(() => toast('Link copied'));
+  }
+};
+
+/* ============ Create ============ */
+$('#btn-create').onclick = async () => {
+  const btn = $('#btn-create');
+  btn.disabled = true; btn.textContent = '⏳ Building…';
+  try {
+    const r = await api('/api/state', netState());
+    const payload = JSON.stringify({
+      id: r.id, filename: r.filename, accent: r.accent,
+      alphaIn: r.alphaIn, alphaOut: r.alphaOut,
+    });
+    if (tg?.sendData) {
+      tg.sendData(payload);          // → bot sends the .attheme in chat
+      toast('Theme sent to chat ✨');
+    } else {
+      // browser fallback: download directly
+      const a = document.createElement('a');
+      a.href = r.file; a.download = r.filename;
+      document.body.append(a); a.click(); a.remove();
+      toast('Downloaded ' + r.filename);
+    }
+  } catch (e) {
+    toast('Build failed — try again');
+  } finally {
+    btn.disabled = false; btn.textContent = '✨ Create theme';
+  }
+};
+
+/* ============ Init ============ */
+syncAlphaUI();
+</script>
+</body>
+</html>
