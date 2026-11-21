@@ -4,6 +4,7 @@ version = "1.0.0"
 edition = "2021"
 rust-version = "1.75"
 description = "Telegram theme-creator bot: turn any picture into a .attheme"
+license = "MIT"
 default-run = "themezzz"
 
 [[bin]]
@@ -11,7 +12,7 @@ name = "themezzz"
 path = "src/main.rs"
 
 [dependencies]
-teloxide = { version = "0.13", features = ["macros"] }
+teloxide = { version = "0.13", features = ["macros", "webhooks-axum"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal"] }
 image = "0.25"
 axum = "0.7"
@@ -22,9 +23,15 @@ dotenvy = "0.15"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 itertools = "0.13"
+base64 = "0.22"
+url = "2"
+futures-util = "0.3.34"
 
 [profile.release]
 opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
+
+[dev-dependencies]
+tower = "0.5.3"
