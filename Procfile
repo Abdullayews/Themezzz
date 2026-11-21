@@ -1,1 +1,1 @@
-web: ./themezzz
+web: ./target/release/themezzz

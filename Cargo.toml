@@ -4,6 +4,7 @@ version = "1.0.0"
 edition = "2021"
 rust-version = "1.75"
 description = "Telegram theme-creator bot: turn any picture into a .attheme"
+default-run = "themezzz"
 
 [[bin]]
 name = "themezzz"
