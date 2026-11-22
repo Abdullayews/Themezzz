@@ -22,8 +22,9 @@ use std::collections::BTreeMap;
 use image::{DynamicImage, Rgba, RgbaImage};
 
 use crate::colors::{build_attheme, luminance, mix, Resolved, Rgb};
+pub use draw::blur_rgba;
 use draw::{blur_fast, round_corners};
-pub(crate) use draw::{blur_rgba, cover_rgba, paste_rgba, D};
+pub(crate) use draw::{cover_rgba, cover_rgba_filter, paste_rgba, D};
 use scene::{Scene, PHONE_H, PHONE_W};
 use theme::ThemeView;
 
@@ -53,7 +54,14 @@ fn paint_wallpaper(img: &mut RgbaImage, a: &PreviewArgs, t: &ThemeView, u: f64) 
     let (w, h) = img.dimensions();
     let loaded = a.wall_bytes.and_then(|b| image::load_from_memory(b).ok());
     if let Some(src) = loaded {
-        let mut cov = cover_rgba(&src, w, h);
+        // a blurred wallpaper hides any resample artifacts, so use the cheap
+        // triangle filter when blur is on; catmull-rom for the crisp case
+        let filter = if a.blur {
+            image::imageops::FilterType::Triangle
+        } else {
+            image::imageops::FilterType::CatmullRom
+        };
+        let mut cov = cover_rgba_filter(&src, w, h, filter);
         if a.blur {
             cov = blur_fast(&cov, 7.0 * u);
         }
@@ -80,7 +88,7 @@ pub fn render_with_report(a: &PreviewArgs) -> (Vec<u8>, Report) {
     let dark = luminance(res.bg) < 0.5;
     let k = 410.0 / PHONE_W; // final px per dp
     let u = SS * k;
-    let (w, h) = (1000.0 * SS, 1000.0 * SS);
+    let h = 1000.0 * SS; // canvas height (width is fixed by the phones)
     let (pw, ph) = ((PHONE_W * u).round(), (PHONE_H * u).round());
     let py = ((h - ph) / 2.0).round();
     let (px1, px2) = (55.0 * SS, 535.0 * SS);
@@ -92,8 +100,6 @@ pub fn render_with_report(a: &PreviewArgs) -> (Vec<u8>, Report) {
         Rgb::new(255, 255, 255)
     };
     let outer = mix(res.accent, anchor, if dark { 0.6 } else { 0.35 });
-    let mut canvas =
-        RgbaImage::from_pixel(w as u32, h as u32, Rgba([outer.r, outer.g, outer.b, 255]));
 
     let sc = Scene { t: &t, u };
 
@@ -106,26 +112,63 @@ pub fn render_with_report(a: &PreviewArgs) -> (Vec<u8>, Report) {
     list::draw(&mut p2, &sc);
     round_corners(&mut p2, radius);
 
-    // soft drop shadow shared by both phones
+    // soft drop shadow shared by both phones — built at 1/10 scale and
+    // upscaled: a σ32 blur hides all upscale interpolation, so the shadow
+    // costs a few ms instead of tens.
     let m = 30.0 * SS;
-    let mut shadow = RgbaImage::new((pw + 2.0 * m) as u32, (ph + 2.0 * m) as u32);
-    D { img: &mut shadow }.round_rect(
-        m,
-        m + 10.0 * SS,
-        m + pw,
-        m + ph + 10.0 * SS,
-        radius,
+    let f = 10u32;
+    let (sw, sh) = (
+        ((pw + 2.0 * m) / f64::from(f)) as u32,
+        ((ph + 2.0 * m) / f64::from(f)) as u32,
+    );
+    let mut small_shadow = RgbaImage::new(sw.max(1), sh.max(1));
+    D {
+        img: &mut small_shadow,
+    }
+    .round_rect(
+        m / f64::from(f),
+        (m + 10.0 * SS) / f64::from(f),
+        (m + pw) / f64::from(f),
+        (m + ph + 10.0 * SS) / f64::from(f),
+        radius / f64::from(f),
         (Rgb::new(0, 0, 0), if dark { 95u8 } else { 50u8 }).into(),
     );
-    let shadow = blur_fast(&shadow, 16.0 * SS);
-    for (px, p) in [(px1, &p1), (px2, &p2)] {
-        paste_rgba(&mut canvas, &shadow, (px - m) as i64, (py - m) as i64);
-        paste_rgba(&mut canvas, p, px as i64, py as i64);
-    }
+    let small_shadow = blur_fast(&small_shadow, 16.0 * SS / f64::from(f));
+    // half-resolution shadow: it is soft by construction, so a 2× smaller
+    // upscale target is invisible and the paste into the final image is 4× cheaper
+    let shadow = image::imageops::resize(
+        &small_shadow,
+        ((pw + 2.0 * m) / SS) as u32,
+        ((ph + 2.0 * m) / SS) as u32,
+        image::imageops::FilterType::CatmullRom,
+    );
 
-    let final_img = DynamicImage::ImageRgba8(canvas)
-        .resize_exact(1000, 1000, image::imageops::FilterType::Lanczos3)
-        .to_rgb8();
+    // Final 1000×1000: the margins are a flat colour, so only the shadow and
+    // phone regions need a real resample — small targeted passes instead of
+    // one CatmullRom over the whole 2000×2000 canvas.
+    let final_img = {
+        let mut out =
+            image::RgbaImage::from_pixel(1000, 1000, Rgba([outer.r, outer.g, outer.b, 255]));
+        for &px in &[px1, px2] {
+            paste_rgba(
+                &mut out,
+                &shadow,
+                ((px - m) / SS) as i64,
+                ((py - m) / SS) as i64,
+            );
+        }
+        for (px, ph_img) in [(px1, &p1), (px2, &p2)] {
+            let resized = DynamicImage::ImageRgba8(ph_img.clone())
+                .resize_exact(
+                    (pw / SS) as u32,
+                    (ph / SS) as u32,
+                    image::imageops::FilterType::CatmullRom,
+                )
+                .to_rgba8();
+            paste_rgba(&mut out, &resized, (px / SS) as i64, (py / SS) as i64);
+        }
+        DynamicImage::ImageRgba8(out).to_rgb8()
+    };
     let mut buf = std::io::Cursor::new(Vec::new());
     final_img
         .write_to(&mut buf, image::ImageFormat::Png)
@@ -260,5 +303,30 @@ mod tests {
         ] {
             assert!(!draw::svg_path(d, |x, y| (x, y)).is_empty());
         }
+    }
+    /// Regression guard for the glyph cache: the preview must paint real text.
+    /// A cache that mis-places glyph rasters (e.g. rebasing draw()'s local
+    /// coordinates against px_bounds) erases ~2/3 of text edges — this fails.
+    #[test]
+    fn preview_paints_readable_text() {
+        let png = render("dark").0;
+        let img = image::load_from_memory(&png).unwrap().to_luma8();
+        let (w, _h) = img.dimensions();
+        let px = img.enumerate_pixels();
+        // count high-contrast horizontal edges (glyph strokes) inside the phones
+        let mut edges = 0usize;
+        for (x, y, p) in px {
+            if x + 5 < w {
+                let q = img.get_pixel(x + 5, y);
+                if (i16::from(p[0]) - i16::from(q[0])).abs() > 40 {
+                    edges += 1;
+                }
+            }
+        }
+        // measured: broken glyph cache ≈ 7k edges, healthy render ≈ 19k+
+        assert!(
+            edges > 15_000,
+            "text too faint — glyph cache regression? edge count: {edges}"
+        );
     }
 }

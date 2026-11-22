@@ -1,15 +1,15 @@
 //! Text rendering with the embedded Roboto subset (Telegram for Android's
 //! typeface): kerning, anti-aliasing, ellipsis and word wrapping.
 
-use std::sync::OnceLock;
-
 use ab_glyph::{point, Font, FontRef, GlyphId, PxScale, ScaleFont};
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 use super::draw::{C, D};
 
 /// Telegram uses Roboto Regular for body text and Roboto Medium for names,
 /// titles and badges.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Weight {
     Regular,
     Medium,
@@ -28,6 +28,45 @@ fn font(w: Weight) -> &'static FontRef<'static> {
                 .expect("embedded Roboto-Medium.ttf is valid")
         }),
     }
+}
+
+/// Rasterized glyph coverage, cached by (weight, quantized size, glyph id).
+/// The preview redraws the same scene strings on every palette tweak, so the
+/// outlines are computed once and reused — this is the bulk of text cost.
+fn glyph_cov(
+    f: &FontRef<'_>,
+    sc: PxScale,
+    id: GlyphId,
+    key: (Weight, u32, u32),
+) -> (i64, i64, u32, u32, Vec<u8>) {
+    type GlyphKey = (Weight, u32, u32);
+    type GlyphCov = (i64, i64, u32, u32, Vec<u8>);
+    static CACHE: OnceLock<Mutex<HashMap<GlyphKey, GlyphCov>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(v) = guard.get(&key) {
+        return v.clone();
+    }
+    let glyph = id.with_scale_and_position(sc, point(0.0, 0.0));
+    if let Some(og) = f.outline_glyph(glyph) {
+        let b = og.px_bounds();
+        let (gw, gh) = (
+            (b.max.x - b.min.x).ceil().max(0.0) as u32,
+            (b.max.y - b.min.y).ceil().max(0.0) as u32,
+        );
+        let mut buf = vec![0u8; (gw * gh) as usize];
+        og.draw(|gx, gy, cov| {
+            // draw() yields LOCAL raster coordinates (0-based, within px_bounds)
+            let c = (cov * 255.0).round().clamp(0.0, 255.0) as u8;
+            if let Some(slot) = buf.get_mut(gy as usize * gw as usize + gx as usize) {
+                *slot = c;
+            }
+        });
+        // remember the integer pixel offset of the glyph's bounds origin
+        let v = (b.min.x.floor() as i64, b.min.y.floor() as i64, gw, gh, buf);
+        guard.insert(key, v);
+    }
+    guard.get(&key).cloned().unwrap_or_default()
 }
 
 /// Android `sp` is the em size; ab_glyph's `PxScale` is the ascent+descent
@@ -89,13 +128,19 @@ impl D<'_> {
             if let Some(p) = prev {
                 caret += sf.kern(p, id);
             }
-            let glyph = id.with_scale_and_position(sc, point(x as f32 + caret, baseline as f32));
-            if let Some(og) = f.outline_glyph(glyph) {
-                let b = og.px_bounds();
-                let (ox, oy) = (b.min.x.floor() as i64, b.min.y.floor() as i64);
-                og.draw(|gx, gy, cov| {
-                    self.blend(ox + i64::from(gx), oy + i64::from(gy), col, cov);
-                });
+            // rasterized coverage cache: scene text is mostly static across
+            // renders, so repeat previews pay nothing for glyph outlines.
+            let key = (w, (em_px * 16.0) as u32, u32::from(id.0));
+            let (dx, dy, gw, gh, buf) = glyph_cov(f, sc, id, key);
+            let ox = (x + f64::from(caret)).floor() as i64 + dx;
+            let oy = baseline.floor() as i64 + dy;
+            for gy in 0..gh {
+                for gx in 0..gw {
+                    let c = buf[(gy * gw + gx) as usize];
+                    if c > 0 {
+                        self.blend(ox + gx as i64, oy + gy as i64, col, f32::from(c) / 255.0);
+                    }
+                }
             }
             caret += sf.h_advance(id);
             prev = Some(id);

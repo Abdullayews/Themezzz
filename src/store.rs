@@ -236,7 +236,7 @@ fn render_thumb(
     );
     let out = DynamicImage::ImageRgba8(img);
     let resized = out
-        .resize_exact(160, 160, image::imageops::FilterType::Lanczos3)
+        .resize_exact(160, 160, image::imageops::FilterType::CatmullRom)
         .to_rgb8();
     let mut buf = std::io::Cursor::new(Vec::new());
     resized.write_to(&mut buf, image::ImageFormat::Png).unwrap();
