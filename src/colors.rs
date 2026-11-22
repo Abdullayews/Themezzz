@@ -526,6 +526,12 @@ pub fn derive_semantics(pal: &[Rgb], bg: Rgb, accent: Rgb, dark: bool) -> Semant
     let tone = |base: Rgb, mn: Option<f64>, mx: Option<f64>| {
         ensure_contrast(clamp_lightness(base, mn, mx), bg, 3.0)
     };
+    // Errors must read as errors on ANY palette: when the picture has no
+    // red/pink hue, fall back to a true red (Telegram's error red, slightly
+    // tinted toward the accent so it still feels part of the theme) instead
+    // of a darkened accent — which rendered as a mute grey circle.
+    let error_base =
+        pick_hue(&pal, 330.0, 25.0).unwrap_or_else(|| mix(Rgb::new(211, 47, 47), accent, 0.25));
     let (link, error, success, flame) = if dark {
         (
             tone(
@@ -533,11 +539,7 @@ pub fn derive_semantics(pal: &[Rgb], bg: Rgb, accent: Rgb, dark: bool) -> Semant
                 Some(0.42),
                 None,
             ),
-            tone(
-                pick_hue(&pal, 330.0, 25.0).unwrap_or_else(|| mix(accent, BLACK, 0.22)),
-                Some(0.45),
-                None,
-            ),
+            tone(error_base, Some(0.50), None),
             tone(
                 pick_hue(&pal, 90.0, 150.0).unwrap_or_else(|| mix(accent, BLACK, 0.12)),
                 Some(0.42),
@@ -556,11 +558,7 @@ pub fn derive_semantics(pal: &[Rgb], bg: Rgb, accent: Rgb, dark: bool) -> Semant
                 None,
                 Some(0.45),
             ),
-            tone(
-                pick_hue(&pal, 330.0, 25.0).unwrap_or_else(|| mix(accent, BLACK, 0.35)),
-                None,
-                Some(0.42),
-            ),
+            tone(error_base, None, Some(0.52)),
             tone(
                 pick_hue(&pal, 90.0, 150.0).unwrap_or_else(|| mix(accent, BLACK, 0.25)),
                 None,
@@ -767,13 +765,13 @@ pub fn build_attheme(
     };
 
     let bar_text = ensure_contrast(text, bar, 3.0);
-    let bar_sub = mix(bar_text, bar, 0.65);
-    let bar_icon = mix(bar_text, bar, 0.82);
+    let bar_sub = mix(bar_text, bar, 0.30);
+    let bar_icon = mix(bar_text, bar, 0.12);
 
     let in_text = ensure_contrast(text, inb, 3.0);
     let out_text = ensure_contrast(text, outb, 3.0);
-    let in_time = mix(in_text, inb, 0.72);
-    let out_time = mix(out_text, outb, 0.75);
+    let in_time = mix(in_text, inb, 0.40);
+    let out_time = mix(out_text, outb, 0.40);
 
     let acc_text = ensure_contrast(accent, bg, 3.0);
     let on_acc = readable_on(accent);
@@ -782,9 +780,11 @@ pub fn build_attheme(
     let reply_in = ensure_contrast(reply, inb, 3.0);
     let reply_out = ensure_contrast(reply, outb, 3.0);
 
-    let gray1 = mix(text, bg, 0.80);
-    let gray2 = mix(text, bg, 0.68);
-    let gray3 = mix(text, bg, 0.55);
+    // secondary text: keep most of the text tone, fade only part-way toward
+    // the background (Telegram's list previews sit near 40-45% toward bg)
+    let gray1 = mix(text, bg, 0.42);
+    let gray2 = mix(text, bg, 0.32);
+    let gray3 = mix(text, bg, 0.28);
 
     let thumb = readable_on(bg);
     let in_sel = mix(inb, BLACK, 0.12);
@@ -1608,11 +1608,15 @@ pub fn build_attheme(
             "windowBackgroundWhiteRedText4",
             "windowBackgroundWhiteRedText5",
             "windowBackgroundWhiteRedText6",
-            "chat_sentErrorIcon",
-            "chats_sentErrorIcon",
             "calls_callReceivedRedIcon",
         ],
         error,
+        255,
+    );
+    // error-badge glyphs sit ON the red circle — keep them readable on it
+    put(
+        &["chat_sentErrorIcon", "chats_sentErrorIcon"],
+        readable_on(error),
         255,
     );
     put(
