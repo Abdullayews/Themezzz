@@ -330,6 +330,10 @@ fn voice(
         )
     };
     let (ccx, ccy) = (x0 + (PAD + 22.0) * u, top + 22.0 * u);
+    // Telegram's media loader is a translucent backdrop ring, not an opaque
+    // disc — cap the alpha so it reads as a subtle circle on any bubble.
+    let mut loader = loader;
+    loader.0[3] = loader.0[3].min(70);
     d.circle(ccx, ccy, 22.0 * u, loader);
     d.icon(icons::PLAY, ccx + u, ccy, 30.0 * u, icon);
     let wx = ccx + 22.0 * u + 9.0 * u;

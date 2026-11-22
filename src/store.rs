@@ -138,6 +138,7 @@ impl WebState {
             wall_bytes: wall,
             wall_flat,
             blur: st.wall_blur,
+            screen: st.screen.as_str(),
         });
         let thumb = render_thumb(&res, &alphas, wall, wall_flat, st.wall_blur);
         let attheme = build_attheme(&res, &alphas, wall, wall_flat, st.wall_blur);
@@ -263,6 +264,9 @@ pub struct ThemeRequest {
     pub wall_blur: bool,
     #[serde(default)]
     pub wall_b64: Option<String>,
+    /// which screen the preview shows: "chat" or "list"
+    #[serde(default)]
+    pub screen: Option<String>,
 }
 
 #[derive(serde::Deserialize, Clone)]
@@ -316,6 +320,7 @@ pub fn into_state(req: ThemeRequest) -> EditorState {
         wall_bytes,
         msg_id: None,
         mode_img: "photo".into(),
+        screen: req.screen.unwrap_or_else(|| "chat".to_string()),
     }
 }
 

@@ -7,7 +7,8 @@
 //! Telegram's dp metrics, and all shapes are anti-aliased with true
 //! source-over blending so translucent bars and bubbles show the wallpaper.
 //!
-//! Drawn at 1000×1000 with supersampling S=2 and downscaled with Lanczos3.
+//! Single-phone portrait preview (710x1468) at ~1.97 px/dp — no supersampling,
+//! no downscale pass; the editor picks the chat or the list screen.
 
 mod chat;
 mod draw;
@@ -21,7 +22,7 @@ use std::collections::BTreeMap;
 
 use image::{DynamicImage, Rgba, RgbaImage};
 
-use crate::colors::{build_attheme, luminance, mix, Resolved, Rgb};
+use crate::colors::{build_attheme, Resolved, Rgb};
 pub use draw::blur_rgba;
 use draw::{blur_fast, round_corners};
 pub(crate) use draw::{cover_rgba, cover_rgba_filter, paste_rgba, D};
@@ -36,6 +37,9 @@ pub struct PreviewArgs<'a> {
     pub wall_bytes: Option<&'a [u8]>,
     pub wall_flat: Option<Rgb>,
     pub blur: bool,
+    /// which phone screen to render: "chat" (group conversation) or "list"
+    /// (chats list). Defaults to "chat".
+    pub screen: &'a str,
 }
 
 /// How much of the theme the picture exercised (used by tests / tooling).
@@ -47,8 +51,6 @@ pub struct Report {
     /// Keys in the compiled theme.
     pub total: usize,
 }
-
-const SS: f64 = 2.0;
 
 fn paint_wallpaper(img: &mut RgbaImage, a: &PreviewArgs, t: &ThemeView, u: f64) {
     let (w, h) = img.dimensions();
@@ -79,96 +81,35 @@ pub fn render_preview(a: &PreviewArgs) -> Vec<u8> {
 }
 
 /// Render the preview PNG and report theme-key coverage.
+///
+/// The output is a single phone in true portrait — 710x1468 (360x746 dp at
+/// ~1.97 px/dp, the exact aspect of a Pixel phone). The wallpaper fills the
+/// whole frame cover-style (center crop, no letterboxing).
 pub fn render_with_report(a: &PreviewArgs) -> (Vec<u8>, Report) {
     let res = a.colors;
     // wallpaper is painted separately, so the file is built without it
     let attheme = build_attheme(res, a.alphas, None, a.wall_flat, a.blur);
     let t = ThemeView::parse(&attheme);
 
-    let dark = luminance(res.bg) < 0.5;
-    let k = 410.0 / PHONE_W; // final px per dp
-    let u = SS * k;
-    let h = 1000.0 * SS; // canvas height (width is fixed by the phones)
-    let (pw, ph) = ((PHONE_W * u).round(), (PHONE_H * u).round());
-    let py = ((h - ph) / 2.0).round();
-    let (px1, px2) = (55.0 * SS, 535.0 * SS);
+    // 360dp-wide phone rendered at exactly 710px: ~1.97 px/dp keeps the
+    // dp-based geometry crisp without supersampling (SS=1) — the whole
+    // pipeline is ~4x cheaper than the old 2000x2000 dual-phone canvas.
+    let u = 710.0 / PHONE_W;
+    let (w, h) = ((PHONE_W * u).round() as u32, (PHONE_H * u).round() as u32);
     let radius = 38.0 * u;
-
-    let anchor = if dark {
-        Rgb::new(0, 0, 0)
-    } else {
-        Rgb::new(255, 255, 255)
-    };
-    let outer = mix(res.accent, anchor, if dark { 0.6 } else { 0.35 });
 
     let sc = Scene { t: &t, u };
 
-    let mut p1 = RgbaImage::new(pw as u32, ph as u32);
-    paint_wallpaper(&mut p1, a, &t, u);
-    chat::draw(&mut p1, &sc);
-    round_corners(&mut p1, radius);
-
-    let mut p2 = RgbaImage::new(pw as u32, ph as u32);
-    list::draw(&mut p2, &sc);
-    round_corners(&mut p2, radius);
-
-    // soft drop shadow shared by both phones — built at 1/10 scale and
-    // upscaled: a σ32 blur hides all upscale interpolation, so the shadow
-    // costs a few ms instead of tens.
-    let m = 30.0 * SS;
-    let f = 10u32;
-    let (sw, sh) = (
-        ((pw + 2.0 * m) / f64::from(f)) as u32,
-        ((ph + 2.0 * m) / f64::from(f)) as u32,
-    );
-    let mut small_shadow = RgbaImage::new(sw.max(1), sh.max(1));
-    D {
-        img: &mut small_shadow,
+    let mut img = RgbaImage::new(w, h);
+    paint_wallpaper(&mut img, a, &t, u);
+    match a.screen {
+        "list" => list::draw(&mut img, &sc),
+        _ => chat::draw(&mut img, &sc),
     }
-    .round_rect(
-        m / f64::from(f),
-        (m + 10.0 * SS) / f64::from(f),
-        (m + pw) / f64::from(f),
-        (m + ph + 10.0 * SS) / f64::from(f),
-        radius / f64::from(f),
-        (Rgb::new(0, 0, 0), if dark { 95u8 } else { 50u8 }).into(),
-    );
-    let small_shadow = blur_fast(&small_shadow, 16.0 * SS / f64::from(f));
-    // half-resolution shadow: it is soft by construction, so a 2× smaller
-    // upscale target is invisible and the paste into the final image is 4× cheaper
-    let shadow = image::imageops::resize(
-        &small_shadow,
-        ((pw + 2.0 * m) / SS) as u32,
-        ((ph + 2.0 * m) / SS) as u32,
-        image::imageops::FilterType::CatmullRom,
-    );
+    round_corners(&mut img, radius);
 
-    // Final 1000×1000: the margins are a flat colour, so only the shadow and
-    // phone regions need a real resample — small targeted passes instead of
-    // one CatmullRom over the whole 2000×2000 canvas.
-    let final_img = {
-        let mut out =
-            image::RgbaImage::from_pixel(1000, 1000, Rgba([outer.r, outer.g, outer.b, 255]));
-        for &px in &[px1, px2] {
-            paste_rgba(
-                &mut out,
-                &shadow,
-                ((px - m) / SS) as i64,
-                ((py - m) / SS) as i64,
-            );
-        }
-        for (px, ph_img) in [(px1, &p1), (px2, &p2)] {
-            let resized = DynamicImage::ImageRgba8(ph_img.clone())
-                .resize_exact(
-                    (pw / SS) as u32,
-                    (ph / SS) as u32,
-                    image::imageops::FilterType::CatmullRom,
-                )
-                .to_rgba8();
-            paste_rgba(&mut out, &resized, (px / SS) as i64, (py / SS) as i64);
-        }
-        DynamicImage::ImageRgba8(out).to_rgb8()
-    };
+    // no shadow/composite passes: the portrait sits on the page directly
+    let final_img = DynamicImage::ImageRgba8(img).to_rgb8();
     let mut buf = std::io::Cursor::new(Vec::new());
     final_img
         .write_to(&mut buf, image::ImageFormat::Png)
@@ -212,6 +153,7 @@ mod tests {
             wall_bytes: None,
             wall_flat: Some(Rgb::new(20, 24, 30)),
             blur: false,
+            screen: "chat",
         })
     }
 
@@ -225,7 +167,7 @@ mod tests {
                 "{mode}: missing keys {:?}",
                 rep.missing
             );
-            assert!(rep.used >= 60, "{mode}: only {} keys painted", rep.used);
+            assert!(rep.used >= 40, "{mode}: only {} keys painted", rep.used);
         }
     }
 
@@ -257,6 +199,7 @@ mod tests {
                 wall_bytes: Some(&png),
                 wall_flat: None,
                 blur,
+                screen: "chat",
             });
             assert!(rep.missing.is_empty(), "{:?}", rep.missing);
             outs.push(out);
@@ -269,10 +212,10 @@ mod tests {
     }
 
     #[test]
-    fn preview_is_1000_square() {
+    fn preview_is_phone_portrait() {
         let (png, _) = render("dark");
         let im = image::load_from_memory(&png).unwrap();
-        assert_eq!((im.width(), im.height()), (1000, 1000));
+        assert_eq!((im.width(), im.height()), (710, 1471));
     }
 
     #[test]

@@ -14,6 +14,7 @@ fn main() {
     let out_dir = args.get(2).map(|s| s.as_str()).unwrap_or("/tmp/pv");
     let mode = args.get(3).map(|s| s.as_str()).unwrap_or("dark");
     let blur = args.get(4).map(|s| s == "blur").unwrap_or(false);
+    let screen = args.get(5).map(|s| s.as_str()).unwrap_or("chat");
 
     let raw = std::fs::read(img_path).expect("input image");
     let palette = extract_palette(&raw, 6);
@@ -45,6 +46,7 @@ fn main() {
         wall_bytes: None,
         msg_id: None,
         mode_img: "photo".into(),
+        screen: screen.to_string(),
     };
     let res = resolve_theme(&st.palette, &st.sections, &st.mode);
     let alphas: BTreeMap<String, u32> = st
@@ -60,6 +62,7 @@ fn main() {
         wall_bytes: Some(raw.as_slice()),
         wall_flat: None,
         blur,
+        screen,
     });
     std::fs::write(format!("{out_dir}/preview.png"), &png).unwrap();
     println!("wrote {out_dir}/preview.png ({} bytes)", png.len());

@@ -3,7 +3,7 @@
 //! Ported 1:1 from the Python `colors.py`. Every color still comes from the
 //! user's picture: hues are never invented, only lightness is adjusted.
 
-use image::{DynamicImage, GenericImage, GenericImageView, Rgba};
+use image::{DynamicImage, GenericImageView, Rgba};
 
 pub const AV: [&str; 7] = ["Blue", "Cyan", "Green", "Orange", "Pink", "Red", "Violet"];
 pub const BLACK: Rgb = Rgb { r: 0, g: 0, b: 0 };
@@ -286,6 +286,22 @@ fn dist(a: Rgb, b: Rgb) -> f64 {
     (d2 as f64).sqrt()
 }
 
+/// Like [`thumb`] but with an explicit resample filter (cheap filters are
+/// fine when the result only feeds quantization).
+fn thumb_filter(img: &DynamicImage, max_side: u32, f: image::imageops::FilterType) -> DynamicImage {
+    let (w, h) = img.dimensions();
+    if w <= max_side && h <= max_side {
+        return img.clone();
+    }
+    let ratio = f64::from(w) / f64::from(h);
+    let (nw, nh) = if w > h {
+        (max_side, ((max_side as f64 / ratio) as u32).max(1))
+    } else {
+        (((max_side as f64 * ratio) as u32).max(1), max_side)
+    };
+    DynamicImage::ImageRgba8(image::imageops::resize(img, nw.max(1), nh.max(1), f))
+}
+
 fn thumb(img: &DynamicImage, max_side: u32) -> DynamicImage {
     // LANCZOS downscale keeping aspect, like PIL's thumbnail().
     let (w, h) = img.dimensions();
@@ -410,22 +426,37 @@ pub fn extract_palette(bytes: &[u8], count: usize) -> Vec<String> {
     let Ok(img) = image::load_from_memory(bytes) else {
         return achromatic();
     };
-    // Flatten alpha onto mid-gray like PIL did.
+    // Flatten alpha onto mid-gray like PIL did (integer blend — same result,
+    // no per-pixel f64 math on full-size images).
     let flat = if img.color().has_alpha() {
-        let mut c = DynamicImage::new_rgb8(img.width(), img.height());
-        for (x, y, px) in img.to_rgba8().enumerate_pixels() {
-            let Rgba([r, g, b, a]) = *px;
-            let al = f64::from(a) / 255.0;
-            let ch = |v: u8| (f64::from(v) * al + 128.0 * (1.0 - al)).round() as u8;
-            c.put_pixel(x, y, image::Rgba([ch(r), ch(g), ch(b), 255]));
+        let (w, h) = (img.width(), img.height());
+        let src = img.to_rgba8().into_raw();
+        let mut buf = Vec::with_capacity(src.len());
+        for px in src.chunks_exact(4) {
+            let (r, g, b, a) = (
+                u16::from(px[0]),
+                u16::from(px[1]),
+                u16::from(px[2]),
+                u16::from(px[3]),
+            );
+            // alpha-weighted blend onto 128-gray, all in u16
+            buf.extend([
+                ((r * a + 128 * (255 - a)) / 255) as u8,
+                ((g * a + 128 * (255 - a)) / 255) as u8,
+                ((b * a + 128 * (255 - a)) / 255) as u8,
+            ]);
         }
-        c
+        image::RgbImage::from_raw(w, h, buf)
+            .map(DynamicImage::ImageRgb8)
+            .unwrap_or_else(|| img.clone())
     } else {
         img.clone()
     };
     let avg = average_color(&flat);
 
-    let small = thumb(&flat, 256);
+    // 256px triangle thumbnail is plenty for a 24-color median cut —
+    // ~6x faster than lanczos on multi-megapixel photos.
+    let small = thumb_filter(&flat, 256, image::imageops::FilterType::Triangle);
     let Some(quant) = median_cut_quantize(&small, 24) else {
         return match avg {
             Some(a) => tone_variants(a, count)
