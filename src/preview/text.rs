@@ -10,6 +10,7 @@ use super::draw::{C, D};
 /// Telegram uses Roboto Regular for body text and Roboto Medium for names,
 /// titles and badges.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[allow(dead_code)]
 pub(crate) enum Weight {
     Regular,
     Medium,
@@ -77,6 +78,7 @@ fn scale(f: &FontRef<'_>, em_px: f64) -> PxScale {
 }
 
 /// Advance width of `s` in pixels.
+#[allow(dead_code)]
 pub(crate) fn measure(w: Weight, em_px: f64, s: &str) -> f64 {
     let f = font(w);
     let sf = f.as_scaled(scale(f, em_px));
@@ -93,6 +95,7 @@ pub(crate) fn measure(w: Weight, em_px: f64, s: &str) -> f64 {
 }
 
 /// Shorten `s` with an ellipsis so it fits `max_w` pixels.
+#[allow(dead_code)]
 pub(crate) fn ellipsize(w: Weight, em_px: f64, max_w: f64, s: &str) -> String {
     if measure(w, em_px, s) <= max_w {
         return s.to_string();
@@ -150,6 +153,7 @@ impl D<'_> {
 }
 
 /// One wrapped line: `(text, style, x offset)` segments plus total width.
+#[allow(dead_code)]
 pub(crate) struct Line {
     pub(crate) segs: Vec<(String, usize, f64)>,
     pub(crate) width: f64,
@@ -157,6 +161,7 @@ pub(crate) struct Line {
 
 /// Greedy word wrap of styled runs (`style` is an index the caller maps to a
 /// colour, e.g. normal text vs link).
+#[allow(dead_code)]
 pub(crate) fn wrap_runs(w: Weight, em_px: f64, max_w: f64, runs: &[(&str, usize)]) -> Vec<Line> {
     let mut lines: Vec<Line> = vec![Line {
         segs: Vec::new(),

@@ -47,7 +47,6 @@ fn main() {
             wall_bytes: None,
             wall_flat,
             blur: false,
-            screen: "chat",
         });
         let p = out_dir.join(format!("preview_{}.png", mode));
         std::fs::write(&p, &png).unwrap();

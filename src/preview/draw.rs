@@ -472,19 +472,6 @@ impl D<'_> {
         let polys = svg_path(data, |x, y| (cx + (x - 12.0) * k, cy + (y - 12.0) * k));
         self.fill_polys(&polys, col);
     }
-
-    /// Vertical two-colour gradient disc (Telegram avatars).
-    pub(crate) fn circle_vgrad(&mut self, cx: f64, cy: f64, r: f64, top: Rgb, bottom: Rgb, a: u8) {
-        for y in (cy - r - 1.0).floor() as i64..=(cy + r + 1.0).ceil() as i64 {
-            let t = ((y as f64 + 0.5 - (cy - r)) / (2.0 * r)).clamp(0.0, 1.0);
-            let col = crate::colors::mix(top, bottom, t);
-            for x in (cx - r - 1.0).floor() as i64..=(cx + r + 1.0).ceil() as i64 {
-                let d = (x as f64 + 0.5 - cx).hypot(y as f64 + 0.5 - cy) - r;
-                let cov = (0.5 - d).clamp(0.0, 1.0);
-                self.blend(x, y, (col, a).into(), cov as f32);
-            }
-        }
-    }
 }
 
 fn add_span(acc: &mut [f32], ix0: i64, xa: f64, xb: f64, wgt: f32) {

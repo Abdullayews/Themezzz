@@ -66,8 +66,6 @@ pub struct EditorState {
     pub wall_bytes: Option<Vec<u8>>,
     pub msg_id: Option<MessageId>,
     pub mode_img: String,
-    /// preview screen: "chat" or "list"
-    pub screen: String,
 }
 
 impl EditorState {

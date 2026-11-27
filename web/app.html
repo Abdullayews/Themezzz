@@ -306,14 +306,10 @@ input[type=range]::-moz-range-thumb {
 
         <section class="card" style="padding:12px 14px">
           <div class="pv-tools">
-            <div class="seg" id="screen-seg">
-              <button data-screen="chat" class="on">💬 Chat</button>
-              <button data-screen="list">☰ List</button>
+            <div class="seg" id="mode-seg">
+              <button data-mode="dark">🌙 Dark</button>
+              <button data-mode="light">☀️ Light</button>
             </div>
-          </div>
-          <div class="seg" id="mode-seg" style="margin-top:10px">
-            <button data-mode="dark">🌙 Dark</button>
-            <button data-mode="light">☀️ Light</button>
           </div>
         </section>
       </div>
@@ -412,7 +408,6 @@ const $$ = s => [...document.querySelectorAll(s)];
 const S = {
   palette: [],
   mode: 'dark',
-  screen: 'chat',
   sections: {},           // k -> {idx, alpha, custom}
   active: 'bg',
   wallMode: 'flat',      // 'image' | 'flat'
@@ -505,7 +500,6 @@ function netState(st) {
     sections[k] = {idx: v.idx, alpha: v.alpha, custom: v.custom};
   return {
     palette: S.palette, mode: st.mode, sections, active: st.active,
-    screen: cur().screen || 'chat',
     wall_mode: st.wallMode, wall_idx: st.wallIdx,
     wall_custom: st.wallCustom ? hex(st.wallCustom) : null,
     wall_blur: st.wallBlur,
@@ -906,13 +900,6 @@ $('#ps-head').onclick = e => {
 };
 document.addEventListener('click', e => {
   if (!e.target.closest('#part-select')) $('#part-select').classList.remove('open');
-});
-
-/* ============ Preview screen (chat | list) ============ */
-$$('#screen-seg button').forEach(b => b.onclick = () => {
-  S.screen = b.dataset.screen;
-  $$('#screen-seg button').forEach(x => x.classList.toggle('on', x === b));
-  schedulePreview();
 });
 
 /* ============ Init ============ */

@@ -13,7 +13,6 @@
 mod chat;
 mod draw;
 mod icons;
-mod list;
 mod scene;
 mod text;
 mod theme;
@@ -37,9 +36,6 @@ pub struct PreviewArgs<'a> {
     pub wall_bytes: Option<&'a [u8]>,
     pub wall_flat: Option<Rgb>,
     pub blur: bool,
-    /// which phone screen to render: "chat" (group conversation) or "list"
-    /// (chats list). Defaults to "chat".
-    pub screen: &'a str,
 }
 
 /// How much of the theme the picture exercised (used by tests / tooling).
@@ -102,10 +98,7 @@ pub fn render_with_report(a: &PreviewArgs) -> (Vec<u8>, Report) {
 
     let mut img = RgbaImage::new(w, h);
     paint_wallpaper(&mut img, a, &t, u);
-    match a.screen {
-        "list" => list::draw(&mut img, &sc),
-        _ => chat::draw(&mut img, &sc),
-    }
+    chat::draw(&mut img, &sc);
     round_corners(&mut img, radius);
 
     // no shadow/composite passes: the portrait sits on the page directly
@@ -153,7 +146,6 @@ mod tests {
             wall_bytes: None,
             wall_flat: Some(Rgb::new(20, 24, 30)),
             blur: false,
-            screen: "chat",
         })
     }
 
@@ -167,7 +159,7 @@ mod tests {
                 "{mode}: missing keys {:?}",
                 rep.missing
             );
-            assert!(rep.used >= 40, "{mode}: only {} keys painted", rep.used);
+            assert!(rep.used >= 18, "{mode}: only {} keys painted", rep.used);
         }
     }
 
@@ -199,7 +191,6 @@ mod tests {
                 wall_bytes: Some(&png),
                 wall_flat: None,
                 blur,
-                screen: "chat",
             });
             assert!(rep.missing.is_empty(), "{:?}", rep.missing);
             outs.push(out);
@@ -266,10 +257,11 @@ mod tests {
                 }
             }
         }
-        // measured: broken glyph cache ≈ 7k edges, healthy render ≈ 19k+
+        // skeleton scene: no glyphs, but bars/bubbles/tails produce crisp
+        // edges. Measured healthy skeleton render ≈ 14k; broken ≈ 7k.
         assert!(
-            edges > 15_000,
-            "text too faint — glyph cache regression? edge count: {edges}"
+            edges > 8_000,
+            "skeleton too faint — render regression? edge count: {edges}"
         );
     }
 }

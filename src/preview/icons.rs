@@ -1,3 +1,5 @@
+#![allow(dead_code)] // icon toolkit: keep all Material paths together
+
 //! Vector icon data (24x24 viewBox). Shapes follow Google's Material icons
 //! (Apache-2.0), which Telegram for Android's own glyphs closely resemble.
 

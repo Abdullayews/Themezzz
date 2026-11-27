@@ -665,14 +665,27 @@ pub fn resolve_theme(palette: &[String], sections: &HashMapSections, mode: &str)
         .copied()
         .max_by(|a, b| luminance(*a).partial_cmp(&luminance(*b)).unwrap())
         .unwrap_or(BLACK);
+    // Accent = the most VIVID palette entry. Raw HLS saturation is 1.0 even for
+    // pale tints and near-blacks, which used to wash the accent out to white or
+    // mud; weighting by distance from mid-lightness picks a real, photo-sourced
+    // color (warm sunset → amber, forest → fresh green).
+    let vivid = |c: Rgb| {
+        let l = luminance(c);
+        saturation(c) * (1.0 - (l - 0.5).abs())
+    };
     let most_sat = pal
         .iter()
         .copied()
-        .max_by(|a, b| saturation(*a).partial_cmp(&saturation(*b)).unwrap())
+        .max_by(|a, b| vivid(*a).partial_cmp(&vivid(*b)).unwrap())
         .unwrap_or(BLACK);
 
+    // Auto surfaces grow from the image's DOMINANT color (palette[0], the
+    // median-cut winner by pixel count) — the theme stays inside the photo's
+    // family instead of collapsing to near-black/near-white. Lightness is
+    // clamped for readability, hue/saturation untouched.
+    let dominant = pal.first().copied().unwrap_or(darkest);
     let auto_bg = if dark {
-        set_lightness(darkest, 0.07)
+        set_lightness(dominant, 0.10)
     } else {
         set_lightness(lightest, 0.96)
     };
@@ -731,19 +744,29 @@ pub fn resolve_wall(
     if wall_idx >= 0 && (wall_idx as usize) < pal.len() {
         return pal[wall_idx as usize];
     }
-    if mode == "dark" {
-        let d = *pal
-            .iter()
-            .min_by_key(|&&c| luminance(c).total_cmp(&luminance(*pal.first().unwrap_or(&BLACK))))
-            .unwrap_or(&BLACK);
-        set_lightness(d, 0.06)
-    } else {
-        let l = *pal
-            .iter()
-            .max_by_key(|&&c| luminance(c).total_cmp(&luminance(*pal.first().unwrap_or(&BLACK))))
-            .unwrap_or(&Rgb::new(255, 255, 255));
-        set_lightness(l, 0.97)
+    // Auto wallpaper = the image's DOMINANT color (palette[0]: median-cut is
+    // sorted by pixel count). Never a canned default — only a tone nudge so
+    // chat content stays readable: deepen slightly in dark mode, lift in light.
+    let dom = pal.first().copied().unwrap_or_else(|| average_of(&pal));
+    match mode {
+        "dark" => set_lightness(dom, 0.16),
+        _ => set_lightness(dom, 0.90),
     }
+}
+
+/// Mean of a (possibly empty) palette; black when there is nothing at all.
+fn average_of(pal: &[Rgb]) -> Rgb {
+    if pal.is_empty() {
+        return BLACK;
+    }
+    let s = pal.iter().fold([0u32; 3], |mut a, c| {
+        a[0] += u32::from(c.r);
+        a[1] += u32::from(c.g);
+        a[2] += u32::from(c.b);
+        a
+    });
+    let n = pal.len() as u32;
+    Rgb::new((s[0] / n) as u8, (s[1] / n) as u8, (s[2] / n) as u8)
 }
 
 // ---------- .attheme serialization ----------
