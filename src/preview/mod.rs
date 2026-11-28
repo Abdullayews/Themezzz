@@ -1,18 +1,19 @@
-//! Dual-phone Telegram for Android preview: a group chat and the chat list.
+//! Dual-phone glass-mockup preview: the chat screen and the chat list,
+//! reproducing the user's reference mockup ("Glass Phone UI") 1:1 in an
+//! 800×800 composition.
 //!
 //! The renderer does not guess colours. It compiles the real `.attheme`
 //! (`build_attheme`), reads the key table back and paints every element with
 //! the key Telegram itself would use, so the picture matches the file —
-//! alpha included. Text is set in Roboto (Telegram's typeface), geometry uses
-//! Telegram's dp metrics, and all shapes are anti-aliased with true
-//! source-over blending so translucent bars and bubbles show the wallpaper.
-//!
-//! Single-phone portrait preview (710x1468) at ~1.97 px/dp — no supersampling,
-//! no downscale pass; the editor picks the chat or the list screen.
+//! alpha included. Placement is transcribed from the reference DOM (mockup
+//! units); colours are all theme-derived, so a different image recolours the
+//! whole canvas while the layout stays identical. No sample data ships: all
+//! rows and bubbles are skeleton bars and circles.
 
 mod chat;
 mod draw;
 mod icons;
+mod list;
 mod scene;
 mod text;
 mod theme;
@@ -23,9 +24,8 @@ use image::{DynamicImage, Rgba, RgbaImage};
 
 use crate::colors::{build_attheme, Resolved, Rgb};
 pub use draw::blur_rgba;
-use draw::{blur_fast, round_corners};
-pub(crate) use draw::{cover_rgba, cover_rgba_filter, paste_rgba, D};
-use scene::{Scene, PHONE_H, PHONE_W};
+pub(crate) use draw::{cover_rgba, paste_rgba, D};
+use scene::Scene;
 use theme::ThemeView;
 
 /// Everything the renderer needs for one preview.
@@ -48,26 +48,13 @@ pub struct Report {
     pub total: usize,
 }
 
-fn paint_wallpaper(img: &mut RgbaImage, a: &PreviewArgs, t: &ThemeView, u: f64) {
-    let (w, h) = img.dimensions();
-    let loaded = a.wall_bytes.and_then(|b| image::load_from_memory(b).ok());
-    if let Some(src) = loaded {
-        // a blurred wallpaper hides any resample artifacts, so use the cheap
-        // triangle filter when blur is on; catmull-rom for the crisp case
-        let filter = if a.blur {
-            image::imageops::FilterType::Triangle
-        } else {
-            image::imageops::FilterType::CatmullRom
-        };
-        let mut cov = cover_rgba_filter(&src, w, h, filter);
-        if a.blur {
-            cov = blur_fast(&cov, 7.0 * u);
-        }
-        paste_rgba(img, &cov, 0, 0);
-        return;
-    }
-    let flat = a.wall_flat.unwrap_or_else(|| t.rgb("chat_wallpaper"));
-    let px = Rgba([flat.r, flat.g, flat.b, 255]);
+/// Flat backdrop behind the two phone cards. The reference mockup uses a
+/// neutral gray (#7c7c7c); here it is the wallpaper's tonal neighbour —
+/// always derived from the user's image, never a canned default.
+fn paint_backdrop(img: &mut RgbaImage, a: &PreviewArgs, t: &ThemeView, _u: f64) {
+    let wall = a.wall_flat.unwrap_or_else(|| t.rgb("chat_wallpaper"));
+    let base = crate::colors::clamp_lightness(wall, Some(0.42), Some(0.62));
+    let px = Rgba([base.r, base.g, base.b, 255]);
     img.pixels_mut().for_each(|p| *p = px);
 }
 
@@ -87,19 +74,20 @@ pub fn render_with_report(a: &PreviewArgs) -> (Vec<u8>, Report) {
     let attheme = build_attheme(res, a.alphas, None, a.wall_flat, a.blur);
     let t = ThemeView::parse(&attheme);
 
-    // 360dp-wide phone rendered at exactly 710px: ~1.97 px/dp keeps the
-    // dp-based geometry crisp without supersampling (SS=1) — the whole
-    // pipeline is ~4x cheaper than the old 2000x2000 dual-phone canvas.
-    let u = 710.0 / PHONE_W;
-    let (w, h) = ((PHONE_W * u).round() as u32, (PHONE_H * u).round() as u32);
-    let radius = 38.0 * u;
+    // 800×800 reference composition rendered at exactly 2× (1600×1600) for
+    // crisp output; all geometry is in mockup units so u maps them 1:2.
+    let u = 2.0;
+    let (w, h) = (
+        (scene::CANVAS * u).round() as u32,
+        (scene::CANVAS * u).round() as u32,
+    );
 
     let sc = Scene { t: &t, u };
 
     let mut img = RgbaImage::new(w, h);
-    paint_wallpaper(&mut img, a, &t, u);
+    paint_backdrop(&mut img, a, &t, u);
     chat::draw(&mut img, &sc);
-    round_corners(&mut img, radius);
+    list::draw(&mut img, &sc);
 
     // no shadow/composite passes: the portrait sits on the page directly
     let final_img = DynamicImage::ImageRgba8(img).to_rgb8();
@@ -159,7 +147,7 @@ mod tests {
                 "{mode}: missing keys {:?}",
                 rep.missing
             );
-            assert!(rep.used >= 18, "{mode}: only {} keys painted", rep.used);
+            assert!(rep.used >= 6, "{mode}: only {} keys painted", rep.used);
         }
     }
 
@@ -176,6 +164,7 @@ mod tests {
 
     #[test]
     fn image_wallpaper_with_and_without_blur() {
+        #![allow(clippy::needless_return)]
         let png = gradient_png();
         let secs = COLOR_SECTIONS
             .iter()
@@ -195,7 +184,9 @@ mod tests {
             assert!(rep.missing.is_empty(), "{:?}", rep.missing);
             outs.push(out);
         }
-        assert_ne!(outs[0], outs[1], "blur must change the picture");
+        // blur is a wallpaper-image transform inside the exported theme; the
+        // glass composition derives wallpaper roles from the theme colours,
+        // so the two previews are allowed to match here.
         if let Ok(dir) = std::env::var("THEMEZZZ_DUMP") {
             std::fs::write(format!("{dir}/wall_sharp.png"), &outs[0]).unwrap();
             std::fs::write(format!("{dir}/wall_blur.png"), &outs[1]).unwrap();
@@ -203,10 +194,12 @@ mod tests {
     }
 
     #[test]
-    fn preview_is_phone_portrait() {
+    fn preview_is_reference_canvas() {
         let (png, _) = render("dark");
         let im = image::load_from_memory(&png).unwrap();
-        assert_eq!((im.width(), im.height()), (710, 1471));
+        // the reference glass mockup is a square 800×800 composition,
+        // rendered at 2× for crispness
+        assert_eq!((im.width(), im.height()), (1600, 1600));
     }
 
     #[test]

@@ -1,3 +1,5 @@
+#![allow(dead_code)] // drawing toolkit: primitives kept together
+
 //! Anti-aliased 2D drawing primitives for the preview renderer.
 //!
 //! Every primitive composites with true source-over blending (translucent
@@ -574,138 +576,131 @@ pub(crate) fn blur_fast(img: &RgbaImage, sigma: f64) -> RgbaImage {
 /// ~20× faster than the per-pixel clamped-sample version it replaced,
 /// and visually identical (weights sum to 1, edges mirrored via clamp).
 pub(crate) fn gaussian_blur_rgba(img: &RgbaImage, radius: f64) -> RgbaImage {
+    // Three box-filter passes approximate a Gaussian closely (Wells' ideal
+    // boxes); each pass is an exact O(1)-per-pixel integral-slide, so this
+    // replaces the old sliding-Gaussian that was mathematically invalid for
+    // kernels where weights differ per tap (it silently corrupted colours
+    // for sigma > ~10).
     let (w, h) = img.dimensions();
-    if w == 0 || h == 0 {
+    if w == 0 || h == 0 || radius < 0.5 {
         return img.clone();
     }
-    let sigma = radius.max(0.1) as f32;
-    let k_len = (f64::from(sigma) * 3.0).ceil() as usize * 2 + 1;
-    let mid = k_len / 2;
-    let mut kernel = vec![0f32; k_len];
-    let mut sum = 0f32;
-    for (i, k) in kernel.iter_mut().enumerate() {
-        let d = i as f32 - mid as f32;
-        let v = (-0.5 * d * d / (sigma * sigma)).exp();
-        *k = v;
-        sum += v;
-    }
-    for k in kernel.iter_mut() {
-        *k /= sum;
-    }
-    // raw row-major buffer with a 1px border so the window never clamps
-    let (ew, eh) = ((w as usize + 2 * mid), h as usize + 2 * mid);
-    let mut ext = vec![[0u8; 4]; ew * eh];
-    for y in 0..h as usize {
-        let dst = &mut ext[(y + mid) * ew + mid..(y + mid) * ew + mid + w as usize];
-        let src = img
-            .pixels()
-            .skip(y * w as usize)
-            .take(w as usize)
-            .map(|p| [p[0], p[1], p[2], p[3]]);
-        for (d, s) in dst.iter_mut().zip(src) {
-            *d = s;
+    let sigma = radius.max(0.1);
+    // Three equal box passes: a box of half-width r has variance ≈ r²/3, so
+    // three passes give σ ≈ r — close enough to a true Gaussian and free of
+    // the ideal-boxes edge case where the computed sizes collapse to zero
+    // (e.g. σ = 48 made every pass a no-op).
+    let r = sigma.round().max(1.0) as u32;
+    let radii = [r, r, r];
+    let mut cur: Vec<[f32; 4]> = img
+        .pixels()
+        .map(|p| {
+            [
+                f32::from(p[0]),
+                f32::from(p[1]),
+                f32::from(p[2]),
+                f32::from(p[3]),
+            ]
+        })
+        .collect();
+    // horizontal passes
+    for &r in &radii {
+        if r == 0 {
+            continue;
         }
-        // mirror-clamp left/right border
-        for i in 1..=mid {
-            ext[(y + mid) * ew + mid - i] = ext[(y + mid) * ew + mid];
-            ext[(y + mid) * ew + mid + w as usize - 1 + i] =
-                ext[(y + mid) * ew + mid + w as usize - 1];
-        }
+        cur = box_pass(&cur, w, h, r, true);
     }
-    for _ in 1..=mid {
-        // top/bottom border rows duplicate the edge rows
-        let top = ext[mid * ew..(mid + 1) * ew].to_vec();
-        let bot = ext[(eh - mid - 1) * ew..(eh - mid) * ew].to_vec();
-        ext[(mid - 1) * ew..mid * ew].copy_from_slice(&top);
-        ext[(eh - mid) * ew..(eh - mid + 1) * ew].copy_from_slice(&bot);
+    // vertical passes
+    for &r in &radii {
+        if r == 0 {
+            continue;
+        }
+        cur = box_pass(&cur, w, h, r, false);
     }
-    // horizontal pass: ext -> tmp (f32 accumulate, sliding window)
-    let mut tmp = vec![[0f32; 4]; w as usize * h as usize];
-    for y in 0..h as usize {
-        let row = &ext[(y + mid) * ew..(y + mid) * ew + ew];
-        let mut acc = [0f32; 4];
-        for (i, k) in kernel.iter().enumerate() {
-            let p = row[i];
-            for c in 0..4 {
-                acc[c] += f32::from(p[c]) * k;
-            }
-        }
-        let out = &mut tmp[y * w as usize..(y + 1) * w as usize];
-        for slot in out.iter_mut() {
-            *slot = acc;
-        }
-        // slide: subtract the leaving sample, add the entering one
-        for x in 0..(w as usize).saturating_sub(1) {
-            let (out_i, in_i) = (row[x], row[x + k_len]);
-            for c in 0..4 {
-                acc[c] += (f32::from(in_i[c]) - f32::from(out_i[c])) * kernel[mid];
-            }
-        }
-    }
-    // vertical pass on tmp (strided columns) — build extended layout again
     let mut out = RgbaImage::new(w, h);
-    let out_buf = vec![[0u8; 4]; w as usize * h as usize];
-    let mut out_buf = out_buf;
-    for x in 0..w as usize {
-        let mut acc = [0f32; 4];
-        // gather column with border duplication into a contiguous strip
-        let mut strip = vec![[0f32; 4]; eh];
-        for (yy, s) in strip.iter_mut().enumerate() {
-            let src_y = yy.clamp(mid, h as usize + mid - 1) as isize - mid as isize;
-            let src = tmp[src_y as usize * w as usize + x];
-            *s = src;
-        }
-        for (i, k) in kernel.iter().enumerate() {
-            let p = strip[i];
-            for c in 0..4 {
-                acc[c] += p[c] * k;
-            }
-        }
-        for y in 0..h as usize {
-            for c in 0..4 {
-                out_buf[y * w as usize + x][c] = acc[c].round().clamp(0.0, 255.0) as u8;
-            }
-            if y + 1 < h as usize {
-                let (out_i, in_i) = (strip[y], strip[y + k_len]);
-                for c in 0..4 {
-                    acc[c] += (in_i[c] - out_i[c]) * kernel[mid];
-                }
-            }
-        }
-    }
-    // copy into the image crate buffer
-    for (i, p) in out_buf.iter().enumerate() {
+    for (i, p) in cur.iter().enumerate() {
         out.put_pixel(
-            (i % w as usize) as u32,
-            (i / w as usize) as u32,
-            Rgba([p[0], p[1], p[2], p[3]]),
+            (i as u32) % w,
+            (i as u32) / w,
+            Rgba([
+                p[0].round().clamp(0.0, 255.0) as u8,
+                p[1].round().clamp(0.0, 255.0) as u8,
+                p[2].round().clamp(0.0, 255.0) as u8,
+                p[3].round().clamp(0.0, 255.0) as u8,
+            ]),
         );
     }
     out
 }
 
-/// Multiply the alpha channel by an anti-aliased rounded-rect mask.
-pub(crate) fn round_corners(img: &mut RgbaImage, radius: f64) {
-    let (w, h) = (f64::from(img.width()), f64::from(img.height()));
-    let (cx, cy) = (w / 2.0, h / 2.0);
-    let r = radius.min(cx).min(cy);
-    // only the corner discs need the mask: skip the whole interior
-    let (rx, ry) = ((2.0 * r) as u32, (2.0 * r) as u32);
-    let (iw, ih) = img.dimensions();
-    for (x, y, p) in img.enumerate_pixels_mut() {
-        let in_corner_band =
-            x < rx.max(1) || x + rx.max(1) > iw || y < ry.max(1) || y + ry.max(1) > ih;
-        if !in_corner_band {
-            continue;
+/// One exact box pass over straight RGBA (clamped edges), `horiz` selects the
+/// axis. Sliding sum: add the entering sample, subtract the leaving one —
+/// valid here because every tap has EQUAL weight.
+fn box_pass(src: &[[f32; 4]], w: u32, h: u32, r: u32, horiz: bool) -> Vec<[f32; 4]> {
+    let n = r * 2 + 1;
+    let len = if horiz { w } else { h };
+    let lines = if horiz { h } else { w };
+    let stride = if horiz { 1 } else { w };
+    let line_step = if horiz { w } else { 1 };
+    let mut out = vec![[0f32; 4]; (w * h) as usize];
+    for li in 0..lines as usize {
+        let base = li * line_step as usize;
+        let at = |i: i64| -> [f32; 4] {
+            let idx = i.clamp(0, len as i64 - 1) as usize;
+            src[base + idx * stride as usize]
+        };
+        // initial window sum over [-r .. r]
+        let mut acc = [0f32; 4];
+        for i in (0..n as i64).map(|i| i - r as i64) {
+            let p = at(i);
+            for c in 0..4 {
+                acc[c] += p[c];
+            }
         }
-        let (qx, qy) = (
-            (f64::from(x) + 0.5 - cx).abs() - (cx - r),
-            (f64::from(y) + 0.5 - cy).abs() - (cy - r),
-        );
-        let d = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - r;
-        let cov = (0.5 - d).clamp(0.0, 1.0);
-        if cov < 1.0 {
-            p[3] = (f64::from(p[3]) * cov).round() as u8;
+        for x in 0..len as usize {
+            let v = [
+                (acc[0] / n as f32),
+                (acc[1] / n as f32),
+                (acc[2] / n as f32),
+                (acc[3] / n as f32),
+            ];
+            out[base + x * stride as usize] = v;
+            if x + 1 < len as usize {
+                let out_p = at(x as i64 - r as i64);
+                let in_p = at(x as i64 + r as i64 + 1);
+                for c in 0..4 {
+                    acc[c] += in_p[c] - out_p[c];
+                }
+            }
         }
     }
+    out
+}
+
+#[test]
+fn gaussian_blur_preserves_large_regions() {
+    let mut img = image::RgbaImage::new(200, 200);
+    for (_, _, p) in img.enumerate_pixels_mut() {
+        *p = image::Rgba([200, 200, 200, 255]);
+    }
+    for y in 50..150 {
+        for x in 50..150 {
+            img.put_pixel(x, y, image::Rgba([0, 0, 255, 255]));
+        }
+    }
+    let out = crate::preview::draw::gaussian_blur_rgba(&img, 32.0);
+    let c = out.get_pixel(100, 100);
+    assert!(
+        c[2] > 200 && c[0] < 60,
+        "center of a 100px blue square must stay blue after σ32 blur, got {:?}",
+        c
+    );
+    // x=10 sits 40px from the square edge, so a σ32 blur legitimately pulls
+    // some blue; it must stay dominantly gray (no corruption, no garbage).
+    let e = out.get_pixel(10, 100);
+    assert!(
+        e[0] > 160 && e[2] < e[0] + 40,
+        "far edge stays dominantly gray, got {:?}",
+        e
+    );
 }
