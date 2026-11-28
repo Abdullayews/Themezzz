@@ -48,12 +48,16 @@ pub struct Report {
     pub total: usize,
 }
 
-/// Flat backdrop behind the two phone cards. The reference mockup uses a
-/// neutral gray (#7c7c7c); here it is the wallpaper's tonal neighbour —
-/// always derived from the user's image, never a canned default.
-fn paint_backdrop(img: &mut RgbaImage, a: &PreviewArgs, t: &ThemeView, _u: f64) {
-    let wall = a.wall_flat.unwrap_or_else(|| t.rgb("chat_wallpaper"));
-    let base = crate::colors::clamp_lightness(wall, Some(0.42), Some(0.62));
+/// Flat backdrop behind the two phone cards: the EXACT most common color of
+/// the user's picture (no lightness clamp, no tonal re-mixing — byte-exact
+/// from the histogram mode). Without an image the user's chosen flat
+/// wallpaper color is used verbatim.
+fn paint_backdrop(img: &mut RgbaImage, a: &PreviewArgs, t: &ThemeView) {
+    let base = a
+        .wall_bytes
+        .and_then(crate::colors::most_common_color)
+        .or(a.wall_flat)
+        .unwrap_or_else(|| t.rgb("chat_wallpaper"));
     let px = Rgba([base.r, base.g, base.b, 255]);
     img.pixels_mut().for_each(|p| *p = px);
 }
@@ -85,8 +89,8 @@ pub fn render_with_report(a: &PreviewArgs) -> (Vec<u8>, Report) {
     let sc = Scene { t: &t, u };
 
     let mut img = RgbaImage::new(w, h);
-    paint_backdrop(&mut img, a, &t, u);
-    chat::draw(&mut img, &sc);
+    paint_backdrop(&mut img, a, &t);
+    chat::draw(&mut img, &sc, a.wall_bytes);
     list::draw(&mut img, &sc);
 
     // no shadow/composite passes: the portrait sits on the page directly
@@ -200,6 +204,95 @@ mod tests {
         // the reference glass mockup is a square 800×800 composition,
         // rendered at 2× for crispness
         assert_eq!((im.width(), im.height()), (1600, 1600));
+    }
+
+    #[test]
+    fn backdrop_is_the_images_most_common_color() {
+        // 100×100 image: 70% solid (10,20,30), 30% checkerboard of bright
+        // colors — the backdrop must be byte-exact (10,20,30), not a clamped
+        // or re-mixed version of it
+        let img = image::RgbaImage::from_fn(100, 100, |x, y| {
+            if (x < 70) || (x + y) % 2 == 0 {
+                image::Rgba([10, 20, 30, 255])
+            } else {
+                image::Rgba([250, 240, 230, 255])
+            }
+        });
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut buf, image::ImageFormat::Png)
+            .unwrap();
+        let wall = buf.into_inner();
+        let secs = COLOR_SECTIONS
+            .iter()
+            .map(|k| (k.to_string(), SectionChoice::default()))
+            .collect();
+        let res = resolve_theme(&pal(), &secs, "dark");
+        let alphas = BTreeMap::new();
+        let png = render_with_report(&PreviewArgs {
+            colors: &res,
+            alphas: &alphas,
+            wall_bytes: Some(&wall),
+            wall_flat: None,
+            blur: false,
+        })
+        .0;
+        let im = image::load_from_memory(&png).unwrap().to_rgb8();
+        // corner of the backdrop, away from both phone cards
+        let p = im.get_pixel(7, 7);
+        assert_eq!(
+            (p[0], p[1], p[2]),
+            (10, 20, 30),
+            "backdrop must equal the mode color byte-for-byte"
+        );
+    }
+
+    #[test]
+    fn heart_shows_the_users_image() {
+        // strongly bicolored image: left half pure red, right half pure
+        // green. The heart's centre-left must sample red-dominant pixels,
+        // centre-right green-dominant ones — proving the picture (not a
+        // flat theme fill) is inside the heart silhouette.
+        let img = image::RgbaImage::from_fn(400, 400, |x, _| {
+            if x < 200 {
+                image::Rgba([200, 20, 20, 255])
+            } else {
+                image::Rgba([20, 200, 20, 255])
+            }
+        });
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut buf, image::ImageFormat::Png)
+            .unwrap();
+        let wall = buf.into_inner();
+        let secs = COLOR_SECTIONS
+            .iter()
+            .map(|k| (k.to_string(), SectionChoice::default()))
+            .collect();
+        let res = resolve_theme(&pal(), &secs, "dark");
+        let alphas = BTreeMap::new();
+        let png = render_with_report(&PreviewArgs {
+            colors: &res,
+            alphas: &alphas,
+            wall_bytes: Some(&wall),
+            wall_flat: None,
+            blur: false,
+        })
+        .0;
+        let im = image::load_from_memory(&png).unwrap().to_rgb8();
+        // heart box in device px (u = 2): x 298..605, y 575..863. Sample the
+        // left lobe below the bubbles and the right lobe in the gap between
+        // bubble rows (canvas y=305) — both strictly inside the silhouette.
+        let left = im.get_pixel(360, 720);
+        let right = im.get_pixel(560, 610);
+        assert!(
+            i16::from(left[0]) - i16::from(left[1]) > 40,
+            "heart left must be red-dominant, got {left:?}"
+        );
+        assert!(
+            i16::from(right[1]) - i16::from(right[0]) > 40,
+            "heart right must be green-dominant, got {right:?}"
+        );
     }
 
     #[test]

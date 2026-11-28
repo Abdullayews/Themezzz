@@ -524,6 +524,59 @@ pub fn extract_palette(bytes: &[u8], count: usize) -> Vec<String> {
 
 // ---------- Wallpaper ----------
 
+/// The single most common color in the picture ("dominant"), computed the
+/// same way PIL's histogram would find it:
+///
+/// * every pixel is flattened onto opaque (alpha blend onto mid-gray, the
+///   same treatment `extract_palette` applies);
+/// * a pixel counts as 1 vote for its 5-bit-per-channel color bin — the
+///   winner is the bin with the most votes, not a quantizer centroid;
+/// * ties break toward the darker bin (stable, deterministic);
+/// * the returned color is the per-channel average of the ACTUAL pixels in
+///   the winning bin, so an all-`(10,20,30)` image returns exactly
+///   `(10,20,30)`, not the bin center.
+pub fn most_common_color(bytes: &[u8]) -> Option<Rgb> {
+    let img = image::load_from_memory(bytes).ok()?;
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    if w == 0 || h == 0 {
+        return None;
+    }
+    // one pass: accumulate vote counts and channel sums per 15-bit bin
+    let mut votes = [0u32; 1 << 15];
+    let mut sums = [[0u64; 3]; 1 << 15];
+    for p in rgba.pixels() {
+        // alpha blend onto mid-gray, matching extract_palette's flattening
+        let (r, g, b, a) = (
+            u16::from(p[0]),
+            u16::from(p[1]),
+            u16::from(p[2]),
+            u16::from(p[3]),
+        );
+        let r = ((r * a + 128 * (255 - a)) / 255) as u8;
+        let g = ((g * a + 128 * (255 - a)) / 255) as u8;
+        let b = ((b * a + 128 * (255 - a)) / 255) as u8;
+        let bin = (usize::from(r) >> 3) << 10 | (usize::from(g) >> 3) << 5 | (usize::from(b) >> 3);
+        votes[bin] += 1;
+        sums[bin][0] += u64::from(r);
+        sums[bin][1] += u64::from(g);
+        sums[bin][2] += u64::from(b);
+    }
+    // mode; darker bin wins ties so the result never depends on scan order
+    let best = votes
+        .iter()
+        .enumerate()
+        .filter(|&(_, &v)| v > 0)
+        .max_by_key(|&(bin, &v)| (u64::from(v), u64::MAX - bin as u64))
+        .map(|(bin, _)| bin)?;
+    let avg = |s: u64| (s / u64::from(votes[best])) as u8;
+    Some(Rgb::new(
+        avg(sums[best][0]),
+        avg(sums[best][1]),
+        avg(sums[best][2]),
+    ))
+}
+
 /// PNG — matches the format of the theme export. NO tint — original.
 pub fn prepare_wallpaper(data: &[u8], max_side: u32) -> Option<Vec<u8>> {
     let img = image::load_from_memory(data).ok()?;
@@ -1737,6 +1790,83 @@ pub fn build_attheme(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Encode an RGB image as PNG bytes.
+    fn png_bytes(w: u32, h: u32, f: impl Fn(u32, u32) -> [u8; 3]) -> Vec<u8> {
+        let img = image::RgbaImage::from_fn(w, h, |x, y| {
+            let [r, g, b] = f(x, y);
+            image::Rgba([r, g, b, 255])
+        });
+        let mut buf = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut buf, image::ImageFormat::Png)
+            .unwrap();
+        buf.into_inner()
+    }
+
+    #[test]
+    fn most_common_color_is_exact_on_uniform_image() {
+        // a uniform image must return that exact color, byte for byte
+        let png = png_bytes(64, 64, |_, _| [10, 20, 30]);
+        assert_eq!(most_common_color(&png), Some(Rgb::new(10, 20, 30)));
+    }
+
+    #[test]
+    fn most_common_color_finds_the_plurality_color() {
+        // 60% dark navy, 40% bright red → navy wins even though red is
+        // louder; the result is the average of the winning pixels only
+        let png = png_bytes(
+            10,
+            10,
+            |x, _| {
+                if x < 6 {
+                    [12, 24, 48]
+                } else {
+                    [255, 30, 30]
+                }
+            },
+        );
+        assert_eq!(most_common_color(&png), Some(Rgb::new(12, 24, 48)));
+    }
+
+    #[test]
+    fn most_common_color_averages_within_winning_bin() {
+        // both shades share the same 5-bit bin (97 and 99 both >> 3 == 12);
+        // the mode must be their per-channel mean, not a bin center
+        let png = png_bytes(8, 8, |x, _| {
+            if x % 2 == 0 {
+                [97, 97, 97]
+            } else {
+                [99, 99, 99]
+            }
+        });
+        assert_eq!(most_common_color(&png), Some(Rgb::new(98, 98, 98)));
+    }
+
+    #[test]
+    fn most_common_color_ties_break_deterministically() {
+        // 50/50 split across two bins → darker bin wins, run after run
+        let png = png_bytes(
+            8,
+            8,
+            |x, _| {
+                if x < 4 {
+                    [10, 10, 10]
+                } else {
+                    [200, 200, 200]
+                }
+            },
+        );
+        let a = most_common_color(&png);
+        let b = most_common_color(&png);
+        assert_eq!(a, b);
+        assert_eq!(a, Some(Rgb::new(10, 10, 10)));
+    }
+
+    #[test]
+    fn most_common_color_garbage_is_none() {
+        assert_eq!(most_common_color(b"not an image"), None);
+    }
 
     #[test]
     fn hex_roundtrip() {

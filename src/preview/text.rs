@@ -1,3 +1,5 @@
+#![allow(dead_code)] // text toolkit kept whole for future real-text scenes
+
 //! Text rendering with the embedded Roboto subset (Telegram for Android's
 //! typeface): kerning, anti-aliasing, ellipsis and word wrapping.
 

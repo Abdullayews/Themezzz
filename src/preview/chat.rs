@@ -21,7 +21,7 @@
 
 use image::RgbaImage;
 
-use super::draw::{gaussian_blur_rgba, PathBuilder, Polys, C, D};
+use super::draw::{cover_rgba, gaussian_blur_rgba, PathBuilder, Polys, C, D};
 use super::scene::{
     card, dot, pill, Scene, CHAT_SCREEN_BOTTOM, CHAT_SCREEN_TOP, CHAT_X, CHAT_Y, PHONE_H, PHONE_R,
     PHONE_W,
@@ -225,7 +225,7 @@ fn hls_rgb(h: f64, l: f64, s: f64) -> Rgb {
 
 /// Paint the chat screen wallpaper: flat underlay, five blurred colour blobs
 /// and the glossy heart — everything clipped to the screen rect.
-fn wallpaper(d: &mut D, sc: &Scene, r: &Roles) {
+fn wallpaper(d: &mut D, sc: &Scene, r: &Roles, a_wall: Option<&[u8]>) {
     let u = sc.u;
     // screen rect in canvas px
     let sx = CHAT_X * u;
@@ -265,11 +265,12 @@ fn wallpaper(d: &mut D, sc: &Scene, r: &Roles) {
         d.img.put_pixel(sx as u32 + x, sy as u32 + y, *p);
     }
 
-    // 3) the heart sits CRISP on top of the blobs (in the reference only its
-    //    drop-shadow is soft; the body is sharp glass)
+    // 3) the heart sits CRISP on top of the blobs: with a wallpaper image
+    //    the user's picture fills the heart body (cover-fit, masked by the
+    //    heart path); without one the theme-derived glass heart is used.
     {
-        let mut hd = HeartCtx { d };
-        draw_heart_direct(&mut hd, sc, r);
+        let hd = HeartCtx { d };
+        draw_heart_direct(hd, sc, r, a_wall);
     }
 }
 
@@ -278,10 +279,11 @@ struct HeartCtx<'a, 'b> {
     d: &'a mut D<'b>,
 }
 
-/// The reference heart: 130×122 path scaled ×1.18, drawn crisp on the
-/// canvas with a soft dark drop shadow, a glass rim, a radial body and a
-/// white gloss arc. Position (149.3, 287.7) canvas units.
-fn draw_heart_direct(hc: &mut HeartCtx, sc: &Scene, r: &Roles) {
+/// The reference heart: 130×122 path scaled ×1.18. The body shows the USER'S
+/// IMAGE when one is set (cover-cropped to the heart silhouette); otherwise
+/// the theme-derived radial glass fill. The rim, drop shadow and gloss arc
+/// are style and stay in both cases. Position (149.3, 287.7) canvas units.
+fn draw_heart_direct(hc: HeartCtx, sc: &Scene, r: &Roles, wall: Option<&[u8]>) {
     let u = sc.u;
     let (hx, hy) = (149.30, 287.68);
     let s = 1.18; // reference transform scale
@@ -354,13 +356,28 @@ fn draw_heart_direct(hc: &mut HeartCtx, sc: &Scene, r: &Roles) {
         191,
     ]));
     hc.d.fill_polys(&path(1.032), rim);
-    // body: radial gradient approximated with concentric fills, light centre
-    let hl = luminance(r.heart);
-    let bands = [(0.97, 0.0), (0.90, 0.16), (0.80, 0.32), (0.68, 0.46)];
-    for (k, light) in bands {
-        let col = clamp_lightness(r.heart, Some(hl + light), None);
-        hc.d.fill_polys(&path(k), (col, 255u8).into());
+
+    // body
+    let body = path(0.97);
+    match wall.and_then(|b| image::load_from_memory(b).ok()) {
+        Some(src) => {
+            // cover-fit the user's image to the heart's bounding box, then
+            // paste it masked by the heart path (rim stays visible around it)
+            let (bw, bh) = (130.0 * s * u, 122.0 * s * u);
+            let cov = cover_rgba(&src, bw.ceil() as u32, bh.ceil() as u32);
+            paste_masked(hc.d, &cov, x0, y0, &body);
+        }
+        None => {
+            // theme-derived radial glass fill (no image set)
+            let hl = luminance(r.heart);
+            let bands = [(0.97, 0.0), (0.90, 0.16), (0.80, 0.32), (0.68, 0.46)];
+            for (k, light) in bands {
+                let col = clamp_lightness(r.heart, Some(hl + light), None);
+                hc.d.fill_polys(&path(k), (col, 255u8).into());
+            }
+        }
     }
+
     // gloss arc: white stroke top-left (reference 33×31 box) — drawn bold
     // enough to read as the reference's specular shine
     let gx = x0 + 11.5 * s * u;
@@ -369,6 +386,108 @@ fn draw_heart_direct(hc: &mut HeartCtx, sc: &Scene, r: &Roles) {
     let arc = gloss_arc(gx, gy, gw, gh);
     let gloss = C(image::Rgba([r.white.0[0], r.white.0[1], r.white.0[2], 215]));
     hc.d.fill_polys(&arc, gloss);
+}
+
+/// Paste `src` at (dx, dy) keeping only the pixels whose centre lies inside
+/// `mask` (a polygon set in the same canvas pixel space). Anti-aliased mask
+/// edges come free from the polygon coverage of the first and last pixel
+/// column/row spans.
+fn paste_masked(d: &mut D, src: &image::RgbaImage, dx: f64, dy: f64, mask: &[Vec<(f64, f64)>]) {
+    // per-row [min_x, max_x] span of the mask, rasterized the same way
+    // fill_polys does (scanline, centre sampling) so the paste aligns with
+    // any polygon fill
+    let (mw, mh) = src.dimensions();
+    let y_lo = mask
+        .iter()
+        .flatten()
+        .map(|p| p.1)
+        .fold(f64::INFINITY, f64::min)
+        .floor()
+        .max(0.0) as i64;
+    let y_hi = mask
+        .iter()
+        .flatten()
+        .map(|p| p.1)
+        .fold(f64::NEG_INFINITY, f64::max)
+        .ceil() as i64;
+    let mut spans: Vec<(i64, i64, i64)> = Vec::new(); // (y, x_lo, x_hi)
+    for y in y_lo..=y_hi {
+        let cy = f64::from(y as u32) + 0.5;
+        // collect crossings of every sub-path against this scanline
+        let mut xs: Vec<f64> = Vec::new();
+        for poly in mask {
+            let n = poly.len();
+            if n < 2 {
+                continue;
+            }
+            // PathBuilder closes its polylines (first point == last point);
+            // iterating segments i→(i+1)%n would walk the closing edge twice
+            // and double every crossing, collapsing the even-odd spans. Walk
+            // n-1 edges only when the ring is already closed.
+            let last = if n > 1 && poly[0] == poly[n - 1] {
+                n - 1
+            } else {
+                n
+            };
+            for i in 0..last {
+                let (ax, ay) = poly[i];
+                let (bx, by) = poly[(i + 1) % n];
+                if (ay <= cy && by > cy) || (by <= cy && ay > cy) {
+                    let t = (cy - ay) / (by - ay);
+                    xs.push(ax + (bx - ax) * t);
+                }
+            }
+        }
+        if xs.len() < 2 {
+            continue;
+        }
+        xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        // even-odd fill between pairs
+        let mut i = 0;
+        while i + 1 < xs.len() {
+            spans.push((y, xs[i].ceil() as i64, xs[i + 1].floor() as i64));
+            i += 2;
+        }
+    }
+    // paste within the mask spans, sampling the source
+    for &(y, x_lo, x_hi) in &spans {
+        let py = y - dy.floor() as i64;
+        if py < 0 || py >= mh as i64 {
+            continue;
+        }
+        for x in x_lo..=x_hi {
+            let pxx = x - dx.floor() as i64;
+            if pxx < 0 || pxx >= mw as i64 {
+                continue;
+            }
+            let p = src.get_pixel(pxx as u32, py as u32);
+            if p[3] == 0 {
+                continue;
+            }
+            let tx = x;
+            let ty = y;
+            let (iw, ih) = d.img.dimensions();
+            if tx >= 0 && ty >= 0 && (tx as u32) < iw && (ty as u32) < ih {
+                let dst = d.img.get_pixel_mut(tx as u32, ty as u32);
+                if p[3] == 255 {
+                    *dst = *p;
+                } else {
+                    // blend straight alpha over the destination
+                    let sa = f32::from(p[3]) / 255.0;
+                    let da = f32::from(dst[3]) / 255.0;
+                    let oa = sa + da * (1.0 - sa);
+                    if oa > 0.0 {
+                        for c in 0..3 {
+                            let v =
+                                (f32::from(p[c]) * sa + f32::from(dst[c]) * da * (1.0 - sa)) / oa;
+                            dst[c] = v.round().clamp(0.0, 255.0) as u8;
+                        }
+                        dst[3] = (oa * 255.0).round().clamp(0.0, 255.0) as u8;
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Quadrant arc stroke approximated as a filled wedge (top-left corner).
@@ -395,6 +514,7 @@ fn gloss_arc(x: f64, y: f64, w: f64, h: f64) -> Polys {
 /// Glass bubble: rounded 14px + small triangle tail on the given side.
 /// Glass = the panel hue lifted toward white (frosted), alpha like the
 /// reference (.82 in / .85 out); dark mode uses a dark tint instead.
+#[allow(clippy::too_many_arguments)] // mockup box + side + roles reads best flat
 fn bubble(d: &mut D, sc: &Scene, out: bool, x: f64, y: f64, w: f64, h: f64, r: &Roles) {
     let u = sc.u;
     let glass = glass_col(sc, r, out);
@@ -492,7 +612,7 @@ fn voice_wave(d: &mut D, sc: &Scene, r: &Roles) {
 
 /* ====================== the scene ====================== */
 
-pub(crate) fn draw(img: &mut RgbaImage, sc: &Scene) {
+pub(crate) fn draw(img: &mut RgbaImage, sc: &Scene, a_wall: Option<&[u8]>) {
     let u = sc.u;
     let r = roles(sc);
     let mut d = D { img };
@@ -518,7 +638,7 @@ pub(crate) fn draw(img: &mut RgbaImage, sc: &Scene) {
     dot(&mut d, sc, 341.0, 87.0, 11.0, r.ink);
 
     /* ---- screen: wallpaper (underlay + blobs + heart) ---- */
-    wallpaper(&mut d, sc, &r);
+    wallpaper(&mut d, sc, &r, a_wall);
 
     /* ---- caption 1 + sparkles + orbit (over the wallpaper) ---- */
     caption(&mut d, sc, 198.0, 154.0, &[112.0, 96.0], &r);

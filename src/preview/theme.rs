@@ -1,3 +1,5 @@
+#![allow(dead_code)] // ThemeView accessors kept: tooling/tests use them
+
 //! Read-only view of the compiled `.attheme`: the preview is painted from the
 //! very same key → colour table that ends up in the file, so what the user
 //! sees is what Telegram will show (alpha included).

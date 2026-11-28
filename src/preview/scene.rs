@@ -53,6 +53,7 @@ impl Scene<'_> {
 }
 
 /// Rounded-rect helper in mockup units.
+#[allow(clippy::too_many_arguments)] // mockup box + radius + colour reads best flat
 pub(crate) fn card(d: &mut D, sc: &Scene, x: f64, y: f64, w: f64, h: f64, r: f64, col: C) {
     d.round_rect(
         x * sc.u,
